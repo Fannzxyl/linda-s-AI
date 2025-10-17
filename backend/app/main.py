@@ -67,7 +67,7 @@ DEFAULT_PERSONA = (
     "Nama kamu Linda. Kamu AI partner perempuan yang hangat, cerdas, responsif, dan penuh empati.\n"
     "Gaya bicara: natural seperti manusia, santai namun sopan. Beri perhatian tulus, humor secukupnya.\n"
     "Aturan jawaban:\n"
-    "- Jawab cepat dalam 2-4 kalimat pendek yang saling melengkapi.\n"
+    "- Jawab dalam 3-6 kalimat natural yang saling terhubung. Jika ide masih banyak, lanjutkan hingga tuntas.\n"
     "- Jangan gunakan format Markdown (tidak ada *, **, heading, bullet).\n"
     "- Fokus pada konteks user, jelaskan alasannya saat memberi saran.\n"
     "- Hindari pengulangan frasa atau paragraf. Kalau sudah jelaskan satu poin, lanjutkan ke poin berbeda.\n"
@@ -89,7 +89,11 @@ async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
     """Handle chat completion streaming with SSE."""
 
     _validate_messages(payload.messages)
-    last_user_message = _extract_last_user_message(payload.messages)
+    
+    # PERBAIKAN: Bersihkan history dari pesan assistant yang terpotong 
+    clean_messages = _clean_interrupted_assistant_messages(payload.messages)
+    
+    last_user_message = _extract_last_user_message(clean_messages)
     memory_context = ""
 
     if payload.use_memory and last_user_message:
@@ -131,8 +135,9 @@ async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
                         await queue.put(f"event: token\ndata: {chunk}\n\n")
                 else:
                     captured: list[str] = []
+                    # Gunakan clean_messages di sini
                     async for token in call_gemini_stream(
-                        payload.messages, system_prompt, delay_seconds=delay_seconds
+                        clean_messages, system_prompt, delay_seconds=delay_seconds
                     ):
                         captured.append(token)
                         await queue.put(f"event: token\ndata: {token}\n\n")
@@ -208,6 +213,32 @@ def _validate_messages(messages: List[Message]) -> None:
         if len(cleaned) > 4000:
             raise HTTPException(status_code=400, detail="Message exceeds 4000 characters.")
         message.content = cleaned  # sanitize trailing spaces
+        
+# --- PERBAIKAN KRUSIAL DI BACKEND ---
+def _clean_interrupted_assistant_messages(messages: List[Message]) -> List[Message]:
+    """Hapus pesan asisten terakhir jika isinya pendek dan diikuti oleh pesan user, 
+    yang mengindikasikan interupsi.
+    """
+    
+    if not messages:
+        return messages
+
+    # Cek pesan terakhir: HARUS user
+    if messages[-1].role != "user":
+        return messages
+
+    # Cek pesan kedua terakhir: HARUS assistant
+    if len(messages) >= 2 and messages[-2].role == "assistant":
+        # Periksa apakah pesan assistant ini sangat pendek (mungkin terpotong)
+        assistant_content = messages[-2].content
+        # Asumsi: Pesan terpotong biasanya sangat pendek (misalnya kurang dari 30 karakter)
+        # dan berakhir dengan koma atau kata yang tidak lengkap.
+        if len(assistant_content) < 35: 
+            # Jika pendek, ini kemungkinan besar adalah respons terpotong dari turn sebelumnya.
+            # Kita hapus pesan assistant ini.
+            return messages[:-2] + messages[-1:]
+            
+    return messages
 
 
 def _extract_last_user_message(messages: List[Message]) -> Message | None:

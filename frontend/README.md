@@ -33,7 +33,8 @@ npm run preview
 
 ## Streaming Chat
 
-- Messages stream token-by-token using an SSE client implemented in `src/lib/sse.ts`. The typing bubble now animates dots while the backend streams.
-- Use the **Gaya bicara** selector to send an extra persona hint to the backend. Hit **Clear Chat** to wipe the local conversation history.
+- Messages stream token-by-token using an SSE client implemented in `src/lib/sse.ts`. Dots animasi muncul sebelum token pertama dan lenyap otomatis.
+- Kotak input tumbuh otomatis mengikuti panjang teks dan memutar bunyi notifikasi singkat saat respons pertama kali masuk.
+- Persona visual ikut berubah (filter cahaya berbeda per gaya bicara). Gunakan **Gaya bicara** untuk memilih preset, lalu tekan **Clear Chat** jika ingin mulai ulang sesi dengan Linda.
 
 Ensure the backend FastAPI server is running locally before sending a message.

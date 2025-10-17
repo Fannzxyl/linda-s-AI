@@ -16,7 +16,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` and fill in your `GEMINI_API_KEY` **and** `GEMINI_MODEL` (for example `gemini-1.5-flash` or `gemini-pro`). Keep the real key outside version control. The server will try safe suffixes such as `-latest` automatically during connection.
+Copy `.env.example` to `.env` and fill in your `GEMINI_API_KEY` **and** `GEMINI_MODEL` (misalnya `gemini-2.0-flash`). Keep the real key outside version control. The server will try safe suffixes such as `-latest` automatically during connection.
 
 ## Development
 
@@ -51,4 +51,5 @@ pytest
 
 - Tweak Gemini endpoint or retry behaviour via environment variables noted in `.env.example`.
 - Logs only surface the host path (without query string) when requests fail, so API keys stay hidden. A successful connection prints one `Gemini connected` line per process.
+- Streaming responses are cached per persona + prompt so pertanyaan ulang dijawab instan tanpa memukul API lagi.
 - SQLite file path is controlled by `MEMORY_DB_PATH` (optional). The default lives under `backend/memory.db`.

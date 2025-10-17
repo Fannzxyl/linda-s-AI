@@ -93,24 +93,48 @@ const Chat = ({ useMemory, persona }: ChatProps) => {
     oscillator.stop(ctx.currentTime + 0.25);
   }, []);
 
-  const formattedHistory = useMemo(
-    () =>
-      messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
-    [messages],
-  );
+  // PERUBAHAN: Hapus useMemo untuk formattedHistory dan buat history baru di handleSubmit
+  // untuk memastikan kita selalu menggunakan history yang paling bersih.
+  
+  // --- Fungsi untuk mengakhiri stream yang terpotong ---
+  const finalizeLastMessage = useCallback(() => {
+      setMessages((prev) => {
+          const next = [...prev];
+          const lastIndex = next.length - 1;
+          const last = next[lastIndex];
+
+          if (last && last.role === "assistant" && last.streaming) {
+              // Jika pesan terakhir masih dalam status streaming:
+              if (last.content.trim() === "") {
+                  // Hapus jika kosong (belum ada kata yang muncul)
+                  next.pop(); 
+              } else {
+                  // Set streaming=false jika ada konten yang terpotong
+                  last.streaming = false;
+                  last.content = last.content.trim();
+              }
+          }
+          return next;
+      });
+      setIsStreaming(false);
+      assistantBufferRef.current = "";
+      firstChunkPlayedRef.current = false;
+  }, []);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!inputValue.trim() || isStreaming) return;
     ensureAudioContext();
 
+    // 1. **PERBAIKAN KRUSIAL**: Hentikan stream yang lama dan hapus pesan yang terpotong
+    streamRef.current?.cancel();
+    finalizeLastMessage(); // <-- Panggil fungsi baru ini sebelum request baru
+
+    const userMessageContent = inputValue.trim();
     const userMessage: ChatMessage = {
       id: createId(),
       role: "user",
-      content: inputValue.trim(),
+      content: userMessageContent,
     };
     const assistantMessage: ChatMessage = {
       id: createId(),
@@ -118,6 +142,17 @@ const Chat = ({ useMemory, persona }: ChatProps) => {
       content: "",
       streaming: true,
     };
+    
+    // PERBAIKAN: Gunakan formattedHistory yang paling baru
+    let cleanHistory = messages.map(msg => ({ role: msg.role, content: msg.content }));
+    
+    // Periksa dan hapus pesan assistant yang sedang streaming dari cleanHistory
+    const lastHistoryItem = cleanHistory[cleanHistory.length - 1];
+    if (lastHistoryItem && lastHistoryItem.role === 'assistant' && lastHistoryItem.content.trim() === '') {
+        // Hapus pesan assistant yang kosong yang mungkin tersisa dari state lama
+        cleanHistory.pop();
+    }
+
 
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
     setInputValue("");
@@ -127,12 +162,12 @@ const Chat = ({ useMemory, persona }: ChatProps) => {
 
     const personaContent = persona.trim();
     const payload = {
-      messages: [...formattedHistory, { role: "user" as const, content: userMessage.content }],
+      // PERBAIKAN: Kirim cleanHistory (yang sudah membersihkan pesan terpotong)
+      messages: [...cleanHistory, { role: "user" as const, content: userMessageContent }],
       persona: personaContent ? personaContent : undefined,
       use_memory: useMemory,
     };
-
-    streamRef.current?.cancel();
+    
     streamRef.current = streamChat(payload, {
       onToken: (token) => {
         if (!token) return;
@@ -203,6 +238,12 @@ const Chat = ({ useMemory, persona }: ChatProps) => {
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
+      // Tambahkan pengecekan ini juga di sini
+      if (isStreaming) { 
+          // Jika sedang streaming, jangan lakukan apa-apa, atau tambahkan feedback
+          console.log("Linda sedang berbicara! Tidak bisa kirim pesan.");
+          return; 
+      }
       handleSubmit(event as unknown as FormEvent);
     }
   };
@@ -217,7 +258,9 @@ const Chat = ({ useMemory, persona }: ChatProps) => {
             streamRef.current?.cancel();
             setIsStreaming(false);
             setMessages([createGreeting()]);
+            setInputValue("");
             assistantBufferRef.current = "";
+            firstChunkPlayedRef.current = false;
           }}
         >
           Clear Chat
@@ -227,15 +270,28 @@ const Chat = ({ useMemory, persona }: ChatProps) => {
         ref={scrollRef}
         className="chat-messages"
       >
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`chat-bubble chat-bubble-${message.role}`}
-          >
-            {message.content || (message.streaming ? <TypingDots /> : null)}
+        {messages.map((message) => {
+          const isLiveTyping =
+            message.role === "assistant" &&
+            message.streaming &&
+            !message.content.trim();
+          if (isLiveTyping) {
+            return null;
+          }
+          return (
+            <div
+              key={message.id}
+              className={`chat-bubble chat-bubble-${message.role}`}
+            >
+              {message.content}
+            </div>
+          );
+        })}
+        {isStreaming && (
+          <div className="typing-row">
+            <TypingDots />
           </div>
-        ))}
-        {isStreaming && <div className="typing-row"><TypingDots /></div>}
+        )}
       </div>
       <form onSubmit={handleSubmit} className="chat-input-area">
         <textarea
@@ -247,6 +303,8 @@ const Chat = ({ useMemory, persona }: ChatProps) => {
           onKeyDown={handleKeyDown}
           rows={3}
           className="chat-textarea"
+          // Atribut disabled sudah benar di sini:
+          disabled={isStreaming}
         />
         <div className="chat-input-footer">
           <span className="char-counter">{inputValue.length}/4000</span>
@@ -254,6 +312,7 @@ const Chat = ({ useMemory, persona }: ChatProps) => {
             type="submit"
             disabled={isStreaming || !inputValue.trim()}
             className="primary-button"
+            // Atribut disabled sudah benar di sini:
           >
             {isStreaming ? "Menunggu..." : "Kirim"}
           </button>
