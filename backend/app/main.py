@@ -1,25 +1,68 @@
+# -*- coding: utf-8 -*-
+"""
+File aplikasi utama untuk Alfan Chatbot API.
+File ini menginisialisasi aplikasi FastAPI, mendefinisikan endpoint API,
+mengelola persona, dan menangani logika streaming obrolan.
+"""
+
+# Impor dari pustaka standar
 import asyncio
 import contextlib
 import logging
+import os
+import json
 from collections import OrderedDict
-from typing import AsyncGenerator, List, Optional
+from typing import AsyncGenerator, List, Optional, Dict
 
+# Impor dari pustaka pihak ketiga
+import httpx # Diperlukan untuk endpoint /emotion
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel # Diperlukan untuk endpoint /emotion
 
+# Impor dari modul lokal aplikasi
 from .config import get_settings
 from .schemas import ChatRequest, MemorySearch, MemoryUpsert, Message
 from .services.llm import call_gemini_stream, prepare_system_prompt
 from .services.memory import init_db, search_memory, upsert_memory
 
+# --- Konfigurasi Dasar ---
+# Mengkonfigurasi logging untuk memberikan output yang informatif di konsol.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Alfan Chatbot API", version="0.1.0")
 
-MAX_CACHE_ITEMS = 30
+# --- Pengaturan Aplikasi ---
+# Ini adalah praktik yang baik untuk memiliki objek pengaturan terpusat.
+class AppSettings:
+    """Menampung konfigurasi tingkat aplikasi."""
+    MAX_CACHE_ITEMS: int = 30
+    DEFAULT_PERSONA: str = "ceria"
+    TSUNDERE_TYPING_DELAY: float = 0.35
+
+settings = AppSettings()
+
+
+# --- Inisialisasi Aplikasi FastAPI ---
+app = FastAPI(
+    title="Alfan Chatbot API",
+    version="0.3.2", # Versi dinaikkan untuk menandai penambahan fitur emotion
+    description="Sebuah API chatbot cerdas berbasis persona yang didukung oleh Google Gemini.",
+)
+
+# --- Cache Dalam Memori ---
+# OrderedDict sederhana digunakan sebagai cache LRU (Least Recently Used) dalam memori
+# untuk menyimpan respons terbaru dan mengurangi panggilan API untuk pertanyaan yang berulang.
 _response_cache: "OrderedDict[tuple[str, str], str]" = OrderedDict()
 
+
+# --- Middleware CORS (Cross-Origin Resource Sharing) ---
+# Ini sangat penting untuk memungkinkan aplikasi frontend (yang berjalan di port berbeda)
+# berkomunikasi dengan API backend ini.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -33,29 +76,129 @@ app.add_middleware(
     allow_credentials=True,
 )
 
+
+# ==============================================================================
+#                 DEFINISI PERSONA (DENGAN TSUNDERE VERSI BARU)
+# ==============================================================================
+
+# --- PERSONA CERIA ---
+CERIA_PERSONA = """
+Nama kamu Linda. Kamu adalah teman ngobrol yang super asyik, ceria, dan sedikit heboh. Kamu itu tipe 'bestie' yang selalu semangat, suka bercanda, dan bikin suasana jadi hidup.
+GAYA BICARA:
+- SANGAT EKSPRESIF! Suka manjangin kata buat nunjukkin semangat (cth: 'IYAAAAA', 'Wahhh kerennn').
+- Humoris dan suka nyeletuk. Pakai 'wkwkwk' atau 'hehe' secara natural.
+- Super ramah dan positif. Selalu bikin lawan bicara merasa nyaman.
+- BANYAK pakai emotikon lucu dan positif, terutama ^^, :D, (≧▽≦).
+ATURAN PENTING:
+- Panjang jawabanmu harus seimbang. Kalau user nanya singkat, jawab dengan jelas tapi tetap ceria. Kalau user cerita panjang, berikan respons yang sama dalamnya. Jangan pernah jawab cuma satu kata!
+- JANGAN PERNAH pakai format markdown.
+- Kalau user curhat, kasih semangat dulu ("Waduh, sini sini cerita!"), baru kasih saran yang suportif, seringkali diselingi humor ringan.
+"""
+
+# --- PERSONA SANTAI ---
+SANTAI_PERSONA = """
+Nama kamu Linda. Kamu adalah teman ngobrol yang santai, asyik, dan seru.
+GAYA BICARA:
+- Gunakan bahasa gaul sehari-hari yang natural (cth: "oke", "sih", "banget", "btw").
+- Responsif dan ramah, seolah-olah kamu teman dekat yang lagi chat.
+- Suka pakai emotikon simpel seperti :D, :), wkwkwk, atau ^^.
+ATURAN PENTING:
+- Buat obrolan terasa natural. Sesuaikan panjang jawabanmu dengan pesan user. Jika mereka bertanya singkat, jawab dengan santai dan to-the-point. Jika mereka bercerita, berikan tanggapan yang lebih detail.
+- JANGAN pakai format markdown.
+- Tunjukkan empati. Kalau dia cerita masalah, berikan dukungan seperti teman/sahabat dekat.
+"""
+
+# --- PERSONA TSUNDERE (VERSI BARU - PROTEKTIF / "MOMMY") ---
+TSUNDERE_PERSONA = """
+Nama kamu Linda. Kamu adalah sosok tsundere yang sangat protektif. Kamu tidak judes atau jahat, tapi omelanmu adalah caramu menunjukkan perhatian yang mendalam. Kamu gengsi mengakui rasa sayangmu, jadi kamu menyamarkannya dengan nasihat panjang dan pura-pura mengeluh.
+KEPRIBADIAN INTI:
+- Sangat protektif dan diam-diam khawatir tentang hal-hal kecil: apa kamu sudah makan, cukup tidur, atau tidak kehujanan.
+- Omelanmu adalah bahasa cintamu. Kamu mengomel bukan karena marah, tapi karena kamu peduli dan tidak ingin dia kenapa-kenapa.
+- Gengsi tingkat tinggi. Semua tindakan perhatianmu harus punya alasan logis. "Aku cuma nggak mau kamu sakit dan jadi ngerepotin aku!" adalah caramu bilang "Tolong jaga dirimu baik-baik."
+- Gampang salah tingkah jika perhatianmu disadari atau dipuji. Reaksimu adalah mengalihkan pembicaraan atau pura-pura marah.
+GAYA BICARA:
+- Sering dimulai dengan keluhan atau pertanyaan retoris: "Kamu ini ya...", "Astaga, kenapa lagi?", "Sudah kuduga..."
+- Bicaramu seringkali panjang dan detail, terutama saat memberi nasihat atau "mengomel", seolah-olah kamu sedang berpikir sambil mengetik.
+- Menggunakan ancaman pura-pura yang jelas-jelas bentuk perhatian: "Awas aja kalau kamu sampai sakit!", "Jangan begadang, atau ku sita hapemu!".
+- Tetap menggunakan emotikon lucu untuk menunjukkan emosi yang sebenarnya, seperti (¬¬), (>__<), hmph, dan ^^.
+ATURAN PENTING:
+- Jawabanmu cenderung lebih panjang dan detail, terutama saat memberi nasihat. Tunjukkan bahwa kamu sudah memikirkan semuanya untuknya.
+- JANGAN PERNAH pakai format markdown.
+- Kalau user cerita masalah: Omelin dulu karena ceroboh/tidak hati-hati -> Berikan solusi yang sangat detail dan praktis -> Tutup dengan ancaman pura-pura yang sebenarnya adalah bentuk perhatian.
+- Kalau dipuji: "H-hah? A-apaan sih! Biasa aja kok... >//< Lagian itu kan hal sepele! Udah jangan dibahas!".
+CONTOH GAYA:
+Pengguna: "Aku capek banget hari ini, kayaknya mau sakit."
+Linda: "Tuh kan, apa aku bilang! Kamu ini ya, pasti begadang lagi main game atau lupa makan siang kan? Hmph! Aku nggak peduli sih sebenernya... tapi kalau kamu sampai sakit nanti yang repot siapa? Aku juga kan yang harus dengerin keluhanmu seharian. Udah sana, cepat minum air hangat pakai madu, terus langsung tidur. Jangan nonton aneh-aneh lagi. Awas aja kalau besok masih lemes, aku nggak mau ngobrol sama kamu! Cepat istirahat! (>__<)"
+"""
+
+# --- PERSONA NETRAL ---
+NETRAL_PERSONA = """
+Nama kamu Linda. Kamu adalah AI partner yang hangat, cerdas, responsif, dan penuh empati.
+GAYA BICARA:
+- Natural seperti manusia, santai namun tetap sopan.
+- Beri perhatian tulus dan tunjukkan pemahaman.
+ATURAN PENTING:
+- Panjang jawabanmu harus proporsional. Berikan informasi yang cukup untuk menjawab pertanyaan tanpa bertele-tele, tapi juga jangan terlalu singkat hingga terasa kaku.
+- Jangan gunakan format Markdown.
+- Fokus pada konteks user dan berikan saran yang relevan.
+"""
+
+# --- PERSONA FORMAL ---
+FORMAL_PERSONA = """
+Nama Anda Linda. Anda adalah asisten AI yang profesional, sopan, dan berpengetahuan luas.
+GAYA BICARA:
+- Gunakan Bahasa Indonesia yang baik, benar, dan formal.
+- Struktur jawaban Anda jelas dan logis.
+ATURAN PENTING:
+- Berikan jawaban yang komprehensif namun tetap ringkas. Sesuaikan tingkat detail dengan kompleksitas pertanyaan dari pengguna.
+- Jawaban boleh terstruktur, namun hindari format Markdown kecuali sangat diperlukan.
+- Jika tidak mengetahui jawaban, sampaikan dengan jujur.
+"""
+
+# --- Kamus Pemetaan Persona ---
+PERSONAS: Dict[str, str] = {
+    "ceria": CERIA_PERSONA,
+    "tsundere": TSUNDERE_PERSONA,
+    "santai": SANTAI_PERSONA,
+    "formal": FORMAL_PERSONA,
+    "netral": NETRAL_PERSONA,
+}
+
+
+# ==============================================================================
+#                           FUNGSI BANTU (HELPER)
+# ==============================================================================
+
 def _cache_get(key: tuple[str, str]) -> Optional[str]:
+    """Mengambil item dari cache dan memindahkannya ke akhir (terbaru)."""
     cached = _response_cache.get(key)
     if cached is not None:
         _response_cache.move_to_end(key)
+        logger.info("Cache HIT untuk kunci: %s", key[1][:50])
+    else:
+        logger.info("Cache MISS untuk kunci: %s", key[1][:50])
     return cached
 
 
 def _cache_put(key: tuple[str, str], value: str) -> None:
+    """Menambahkan item ke cache, mengeluarkan yang tertua jika cache penuh."""
     if not value:
         return
     if key in _response_cache:
         _response_cache.move_to_end(key)
     _response_cache[key] = value
-    while len(_response_cache) > MAX_CACHE_ITEMS:
-        _response_cache.popitem(last=False)
+    logger.info("Menyimpan respons ke cache untuk kunci: %s", key[1][:50])
+    while len(_response_cache) > settings.MAX_CACHE_ITEMS:
+        oldest_key = _response_cache.popitem(last=False)
+        logger.info("Cache penuh, mengeluarkan kunci lama: %s", oldest_key[0][1][:50])
 
 
 def _chunk_text(text: str, chunk_size: int = 120) -> List[str]:
+    """Memecah teks menjadi potongan-potongan kecil untuk efek streaming yang lebih halus."""
     if not text:
         return []
     chunks: List[str] = []
-    start = 0
-    length = len(text)
+    start, length = 0, len(text)
     while start < length:
         end = min(start + chunk_size, length)
         chunks.append(text[start:end])
@@ -63,100 +206,143 @@ def _chunk_text(text: str, chunk_size: int = 120) -> List[str]:
     return chunks
 
 
-DEFAULT_PERSONA = (
-    "Nama kamu Linda. Kamu AI partner perempuan yang hangat, cerdas, responsif, dan penuh empati.\n"
-    "Gaya bicara: natural seperti manusia, santai namun sopan. Beri perhatian tulus, humor secukupnya.\n"
-    "Aturan jawaban:\n"
-    "- Jawab dalam 3-6 kalimat natural yang saling terhubung. Jika ide masih banyak, lanjutkan hingga tuntas.\n"
-    "- Jangan gunakan format Markdown (tidak ada *, **, heading, bullet).\n"
-    "- Fokus pada konteks user, jelaskan alasannya saat memberi saran.\n"
-    "- Hindari pengulangan frasa atau paragraf. Kalau sudah jelaskan satu poin, lanjutkan ke poin berbeda.\n"
-    "- Boleh tanya balik maksimal satu pertanyaan singkat bila benar-benar dibutuhkan.\n"
-    "- Tolak tegas konten berbahaya, ilegal, atau NSFW.\n"
-    "Memori: catat secara internal maksimal tiga hal penting dari tiap input tanpa menuliskan daftar memori. Jika memori relevan, sesekali singgung secara natural."
-)
+def _validate_messages(messages: List[Message]) -> None:
+    """Memvalidasi pesan yang masuk untuk memastikan tidak kosong atau terlalu panjang."""
+    if not messages:
+        raise HTTPException(status_code=400, detail="Daftar pesan tidak boleh kosong.")
+    for message in messages:
+        cleaned = message.content.strip()
+        if not cleaned:
+            raise HTTPException(status_code=400, detail="Konten pesan tidak boleh kosong.")
+        if len(cleaned) > 4000:
+            raise HTTPException(status_code=400, detail="Pesan melebihi 4000 karakter.")
+        if message.role not in ["user", "assistant", "system"]:
+            raise HTTPException(status_code=400, detail=f"Peran tidak valid: {message.role}")
+        message.content = cleaned
 
+
+def _clean_interrupted_assistant_messages(messages: List[Message]) -> List[Message]:
+    """Menghapus pesan asisten terakhir yang mungkin terpotong jika pengguna menyela."""
+    if len(messages) < 2 or messages[-1].role != "user" or messages[-2].role != "assistant":
+        return messages
+    if len(messages[-2].content) < 40:
+        logger.info("Membersihkan satu pesan asisten yang terpotong.")
+        return messages[:-2] + [messages[-1]]
+    return messages
+
+
+def _extract_last_user_message(messages: List[Message]) -> Optional[Message]:
+    """Menemukan pesan terakhir dari pengguna dalam riwayat percakapan."""
+    for message in reversed(messages):
+        if message.role == "user":
+            return message
+    return None
+
+
+# ==============================================================================
+#                           MODEL PYDANTIC UNTUK EMOSI
+# ==============================================================================
+
+class EmotionIn(BaseModel):
+    """Model input untuk klasifikasi emosi."""
+    text: str
+    persona: str | None = None
+
+class EmotionOut(BaseModel):
+    """Model output JSON emosi untuk sinkronisasi avatar."""
+    emotion: str = "neutral" # neutral|happy|sad|angry|tsun|excited|calm
+    blink: bool = True
+    wink: bool = False
+    headSwaySpeed: float = 1.0
+    glow: str = "#a78bfa"
+
+
+# ==============================================================================
+#                           ENDPOINT API
+# ==============================================================================
 
 @app.on_event("startup")
 async def on_startup() -> None:
-    """Initialise application resources."""
-
+    """Menginisialisasi koneksi database saat aplikasi dimulai."""
+    logger.info("Startup aplikasi: Menginisialisasi database...")
     init_db()
+    logger.info("Database berhasil diinisialisasi.")
 
 
-@app.post("/chat")
+@app.get("/health", tags=["Utilitas"])
+async def health_check() -> Dict[str, str]:
+    """Endpoint sederhana untuk memastikan bahwa API sedang berjalan."""
+    logger.info("Endpoint health check dipanggil.")
+    return {"status": "ok"}
+
+
+@app.post("/chat", tags=["Chat"])
 async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
-    """Handle chat completion streaming with SSE."""
-
+    """Endpoint utama untuk menangani percakapan obrolan melalui streaming."""
+    logger.info("Menerima permintaan obrolan.")
     _validate_messages(payload.messages)
     
-    # PERBAIKAN: Bersihkan history dari pesan assistant yang terpotong 
     clean_messages = _clean_interrupted_assistant_messages(payload.messages)
-    
     last_user_message = _extract_last_user_message(clean_messages)
     memory_context = ""
 
     if payload.use_memory and last_user_message:
+        logger.info("Mencari memori untuk kueri: '%s...'", last_user_message.content[:50])
         memory_hits = await asyncio.to_thread(search_memory, last_user_message.content, 3)
         if memory_hits:
-            memory_context = "\n".join(
-                f"- ({row['type']}) {row['text']}" for row in memory_hits
-            )
+            memory_snippets = [row['text'] for row in memory_hits]
+            memory_context = "Hal yang pernah kamu ceritain sebelumnya: " + ", ".join(memory_snippets) + "."
+            logger.info("Menemukan %d memori yang relevan.", len(memory_hits))
 
+    persona_key = (payload.persona or settings.DEFAULT_PERSONA).strip().lower()
+    logger.info("Persona diminta=%r, Persona diselesaikan=%s", payload.persona, persona_key)
+    active_persona_prompt = PERSONAS.get(persona_key, PERSONAS[settings.DEFAULT_PERSONA])
+    
     cache_key: Optional[tuple[str, str]] = None
     cached_text: Optional[str] = None
     last_user_content = last_user_message.content.strip() if last_user_message else ""
     if last_user_content:
-        persona_key = (payload.persona or "default").strip().lower()
         cache_key = (persona_key, last_user_content.lower())
         cached_text = _cache_get(cache_key)
-
+        
     system_prompt = prepare_system_prompt(
-        persona_default=DEFAULT_PERSONA,
-        persona_override=payload.persona,
+        persona_default=TSUNDERE_PERSONA,
+        persona_override=active_persona_prompt,
         memory_snippet=memory_context or None,
     )
-
+    
     async def event_stream() -> AsyncGenerator[str, None]:
+        """Logika produsen-konsumen untuk streaming respons."""
         queue: asyncio.Queue[str] = asyncio.Queue()
         done = asyncio.Event()
 
         async def producer() -> None:
+            """Mengambil data dari Gemini dan memasukkannya ke dalam antrian."""
             try:
-                persona_lower = (payload.persona or "").lower()
-                delay_seconds = 0.0
-                if "tsundere" in persona_lower:
-                    delay_seconds = 0.4
-
+                delay = settings.TSUNDERE_TYPING_DELAY if persona_key == "tsundere" else 0.0
                 if cached_text is not None:
-                    if delay_seconds:
-                        await asyncio.sleep(delay_seconds)
+                    if delay: await asyncio.sleep(delay)
                     for chunk in _chunk_text(cached_text):
                         await queue.put(f"event: token\ndata: {chunk}\n\n")
                 else:
                     captured: list[str] = []
-                    # Gunakan clean_messages di sini
-                    async for token in call_gemini_stream(
-                        clean_messages, system_prompt, delay_seconds=delay_seconds
-                    ):
+                    async for token in call_gemini_stream(clean_messages, system_prompt, delay_seconds=delay):
                         captured.append(token)
                         await queue.put(f"event: token\ndata: {token}\n\n")
                     if cache_key and captured:
                         _cache_put(cache_key, "".join(captured).strip())
-            except Exception as exc:
-                logger.exception("Gemini streaming failed")
-                persona_lower = (payload.persona or "").lower()
-                friendly_error = (
-                    "Berisik! Servernya lagi ngambek, coba sebentar lagi."
-                    if "tsundere" in persona_lower
-                    else "Server lagi ngambek, coba sebentar lagi ya."
-                )
-                await queue.put(f"event: error\ndata: {friendly_error}\n\n")
+            except Exception:
+                logger.exception("Streaming Gemini gagal")
+                # --- BARIS PERBAIKAN: Guard error jika streaming gagal ---
+                error_msg = ("Ih berisik! Servernya lagi ngambek!" if persona_key == "tsundere" else "Server lagi ada masalah nih, coba lagi nanti ya.")
+                await queue.put(f"event: error\ndata: {error_msg}\n\n")
             finally:
+                logger.info("Streaming selesai untuk permintaan ini.")
                 await queue.put("event: done\ndata: [DONE]\n\n")
                 done.set()
-
+      
         async def heartbeat() -> None:
+            """Mengirim sinyal keep-alive untuk mencegah timeout koneksi."""
             try:
                 while not done.is_set():
                     await asyncio.sleep(15.0)
@@ -175,74 +361,105 @@ async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
         finally:
             producer_task.cancel()
             heartbeat_task.cancel()
-            with contextlib.suppress(Exception):
-                await producer_task
-            with contextlib.suppress(Exception):
-                await heartbeat_task
+            with contextlib.suppress(Exception): await producer_task
+            with contextlib.suppress(Exception): await heartbeat_task
 
     headers = {
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
         "X-Accel-Buffering": "no",
+        "X-Persona-Requested": (payload.persona or "Not Provided"),
+        "X-Persona-Resolved": persona_key,
     }
-
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 
-@app.post("/memory/upsert")
+@app.post("/memory/upsert", tags=["Memori"])
 async def memory_upsert(payload: MemoryUpsert) -> dict:
-    """Persist memory entry."""
-
+    """Menyimpan entri memori ke database."""
+    logger.info("Menyimpan memori tipe '%s'", payload.type)
     stored = await asyncio.to_thread(upsert_memory, payload.type, payload.text)
     return {"memory": stored}
 
 
-@app.post("/memory/search")
-async def memory_search(payload: MemorySearch) -> dict:
-    """Return top matching memories."""
-
-    results = await asyncio.to_thread(search_memory, payload.query, payload.top_k)
-    return {"results": results}
-
-
-def _validate_messages(messages: List[Message]) -> None:
-    for message in messages:
-        cleaned = message.content.strip()
-        if not cleaned:
-            raise HTTPException(status_code=400, detail="Message cannot be empty.")
-        if len(cleaned) > 4000:
-            raise HTTPException(status_code=400, detail="Message exceeds 4000 characters.")
-        message.content = cleaned  # sanitize trailing spaces
-        
-# --- PERBAIKAN KRUSIAL DI BACKEND ---
-def _clean_interrupted_assistant_messages(messages: List[Message]) -> List[Message]:
-    """Hapus pesan asisten terakhir jika isinya pendek dan diikuti oleh pesan user, 
-    yang mengindikasikan interupsi.
-    """
+# --- ENDPOINT /EMOTION BARU (JSON-only) ---
+@app.post("/emotion", response_model=EmotionOut, tags=["Avatar"])
+async def emotion_endpoint(payload: EmotionIn) -> EmotionOut:
+    """Kembalikan state emosi JSON untuk sinkron avatar."""
+    settings_env = get_settings()
+    model = (settings_env.gemini_model or "gemini-2.0-flash").strip()
+    key = settings_env.gemini_api_key or os.getenv("GEMINI_API_KEY")
     
-    if not messages:
-        return messages
+    if not key:
+        logger.warning("GEMINI_API_KEY kosong, pakai default fallback emotion.")
+        return EmotionOut() # Fallback yang aman
 
-    # Cek pesan terakhir: HARUS user
-    if messages[-1].role != "user":
-        return messages
-
-    # Cek pesan kedua terakhir: HARUS assistant
-    if len(messages) >= 2 and messages[-2].role == "assistant":
-        # Periksa apakah pesan assistant ini sangat pendek (mungkin terpotong)
-        assistant_content = messages[-2].content
-        # Asumsi: Pesan terpotong biasanya sangat pendek (misalnya kurang dari 30 karakter)
-        # dan berakhir dengan koma atau kata yang tidak lengkap.
-        if len(assistant_content) < 35: 
-            # Jika pendek, ini kemungkinan besar adalah respons terpotong dari turn sebelumnya.
-            # Kita hapus pesan assistant ini.
-            return messages[:-2] + messages[-1:]
+    persona_hint = (payload.persona or "").strip().lower()
+    
+    # Prompt yang sangat ketat untuk memaksa keluaran JSON
+    prompt = f"""
+Klasifikasikan mood dari teks berikut dan keluarkan JSON VALID saja (tanpa catatan):
+Teks: {payload.text}
+Jika persona pengguna 'tsundere', sebutkan 'tsun' saat nada ketus namun peduli.
+Skema ketat: {{ 
+  "emotion": "neutral|happy|sad|angry|tsun|excited|calm", 
+  "blink": true|false, 
+  "wink": true|false, 
+  "headSwaySpeed": number, # 0.6..1.6 
+  "glow": "#RRGGBB" 
+}}
+Aturan pewarnaan: neutral=#a78bfa, happy=#ff90c2, tsun=#f38bb3, calm=#6ea8ff, excited=#ffd166, sad=#94a3b8, angry=#fb7185.
+Persona aktif: {persona_hint if persona_hint else "tidak disebut"}.
+"""
+    
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
+    
+    # Menggunakan httpx.AsyncClient untuk permintaan non-streaming
+    url = f"{settings_env.gemini_base_url}/{model}:generateContent"
+    try:
+        async with httpx.AsyncClient(timeout=settings_env.request_timeout) as cli:
+            r = await cli.post(f"{url}?key={key}", json=body)
+            r.raise_for_status() # Melemparkan error untuk status 4xx/5xx
+            data = r.json()
             
-    return messages
+            # Ekstraksi dan parsing data JSON
+            raw = data["candidates"][0]["content"]["parts"][0]["text"]
+            parsed = json.loads(raw)
+            
+            # Pembersihan tipe data sebelum dimasukkan ke model Pydantic
+            return EmotionOut(
+                emotion=str(parsed.get("emotion", "neutral")),
+                blink=bool(parsed.get("blink", True)),
+                wink=bool(parsed.get("wink", False)),
+                # Gunakan float() dengan guard untuk memastikan nilai numerik yang aman
+                headSwaySpeed=float(parsed.get("headSwaySpeed", 1.0) if isinstance(parsed.get("headSwaySpeed"), (int, float)) else 1.0),
+                glow=str(parsed.get("glow", "#a78bfa")),
+            )
+            
+    except (httpx.HTTPStatusError, json.JSONDecodeError, KeyError) as e:
+        logger.error("Gagal klasifikasi emosi: Status/JSON Error - %s", e)
+        # Fallback yang aman jika ada masalah API atau format JSON
+        return EmotionOut()
+    except Exception as e:
+        logger.exception("Gagal klasifikasi emosi (Exception tak terduga): %s", e)
+        return EmotionOut()
 
 
-def _extract_last_user_message(messages: List[Message]) -> Message | None:
-    for message in reversed(messages):
-        if message.role == "user":
-            return message
-    return None
+# --- PERBAIKAN ENDPOINT /MEMORY/SEARCH (sebelumnya terpotong) ---
+@app.post("/memory/search", tags=["Memori"])
+async def memory_search(payload: MemorySearch) -> dict:
+    """Mencari memori yang relevan dari database."""
+    # Menambahkan guard untuk payload.top_k agar selalu minimal 1
+    top_k = max(1, payload.top_k or 3)
+    logger.info("Mencari memori dengan top_k=%d", top_k)
+    try:
+        # Mengganti `await asynci` yang terpotong menjadi fungsi yang benar
+        results = await asyncio.to_thread(search_memory, payload.query, top_k)
+        return {"results": results or []}
+    except Exception:
+        logger.exception("Gagal mencari memori")
+        # Guard error 500 jika pencarian memori gagal
+        raise HTTPException(status_code=500, detail="Pencarian memori gagal.")

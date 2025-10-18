@@ -49,6 +49,7 @@ const CharacterLayer = forwardRef<CharacterLayerHandle, CharacterLayerProps>(
               centerLeft: { ...prev.centerLeft, x: value },
             })),
         },
+        // ... slider config lainnya tetap sama ...
         {
           label: "Left Y",
           value: eyeConfig.centerLeft.y,
@@ -124,11 +125,16 @@ const CharacterLayer = forwardRef<CharacterLayerHandle, CharacterLayerProps>(
         data-persona={personaStyle}
       >
         <div className="avatar-glow" />
+        
+        {/* ========================================================== */}
+        {/*           PERBAIKAN KRUSIAL ADA DI BARIS INI               */}
+        {/* ========================================================== */}
         <img
-          src="/character.png"
+          src="/character.gif" 
           alt="Linda anime avatar"
           className="avatar-image"
         />
+
         <div className="avatar-shine" />
         <Avatar eyeConfig={eyeConfig} containerRef={containerRef} />
         <button

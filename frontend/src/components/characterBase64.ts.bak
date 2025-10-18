@@ -1,0 +1,6 @@
+// File ini hanya berfungsi untuk menyimpan data gambar Base64 agar tidak mengotori komponen utama.
+
+export const characterGifBase64 = "PASTE_TEKS_BASE64_ANDA_DI_SINI";
+
+// Contoh setelah di-paste (teks aslinya akan jauuuh lebih panjang):
+// export const characterGifBase64 = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7...";

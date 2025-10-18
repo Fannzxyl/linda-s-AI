@@ -12,15 +12,27 @@ from ..schemas import Message
 logger = logging.getLogger(__name__)
 _CONNECTED_FLAG = False
 
-def prepare_system_prompt(persona_default: str, persona_override: str | None = None, memory_snippet: str | None = None) -> str:
-    """Return the final system prompt with optional overrides and memory context."""
 
-    sections = [persona_default.strip()]
-    if persona_override:
-        sections.append(persona_override.strip())
+# ### PERBAIKAN KRUSIAL: FUNGSI INI DIGANTI TOTAL ###
+# Logika baru ini memastikan hanya SATU persona yang aktif: override, atau default jika override tidak ada.
+# Persona tidak lagi digabungkan, sehingga menyelesaikan masalah utama.
+def prepare_system_prompt(
+    persona_default: str,
+    persona_override: str | None = None,
+    memory_snippet: str | None = None,
+) -> str:
+    """Return the final system prompt with optional overrides and memory context."""
+    # Pakai override kalau ada; JANGAN gabung dengan default.
+    persona = (persona_override or persona_default).strip()
+
+    parts = [persona]
     if memory_snippet:
-        sections.append(f"Konteks singkat dari memori:\n{memory_snippet.strip()}")
-    return "\n\n".join(filter(None, sections))
+        # Menggabungkan memori dengan format yang lebih natural
+        parts.append(
+            "Catatan konteks dari obrolan sebelumnya: " + memory_snippet.strip() +
+            "\nGunakan konteks ini secara natural dalam percakapan, jangan sebutkan sebagai daftar memori."
+        )
+    return "\n\n".join(parts)
 
 
 async def call_gemini_stream(
@@ -48,10 +60,7 @@ async def call_gemini_stream(
                 async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
                     async with client.stream("POST", url, params=params, json=payload) as response:
                         if response.status_code == 404 and idx < len(candidate_models) - 1:
-                            # This variant is not available; break to try next model option.
-                            last_error = httpx.HTTPStatusError(
-                                "Model variant not found", request=response.request, response=response
-                            )
+                            last_error = httpx.HTTPStatusError("Model variant not found", request=response.request, response=response)
                             _log_http_error(last_error)
                             break
                         response.raise_for_status()
@@ -110,28 +119,23 @@ async def call_gemini_stream(
 
 def _build_payload(messages: List[Message], system_prompt: str) -> Dict:
     """Map internal message schema to Gemini request payload."""
-
-    system_parts: List[str] = [system_prompt]
+    # Gemini modern models prefer system instruction as a top-level field.
     contents: List[Dict[str, object]] = []
-
     for message in messages:
+        # Skip legacy system message, it's handled by system_prompt
         if message.role == "system":
-            system_parts.append(message.content)
             continue
         role = "user" if message.role == "user" else "model"
         contents.append({"role": role, "parts": [{"text": message.content}]})
 
     payload: Dict[str, object] = {
-        "system_instruction": {
-            "role": "system",
-            "parts": [{"text": part} for part in system_parts],
-        },
+        "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
         "generationConfig": {
-            "temperature": 0.6,
+            "temperature": 0.65,
             "topP": 0.9,
             "topK": 32,
-            "maxOutputTokens": 512,
+            "maxOutputTokens": 600,
             "responseMimeType": "text/plain",
         },
     }
@@ -139,77 +143,47 @@ def _build_payload(messages: List[Message], system_prompt: str) -> Dict:
 
 
 async def _read_sse_payloads(response: httpx.Response) -> AsyncGenerator[str, None]:
-    """Aggregate SSE data lines into complete JSON payloads."""
-
     buffer = []
     async for raw_line in response.aiter_lines():
-        if raw_line.startswith(":"):
-            # comment / heartbeat
-            continue
-        if raw_line.startswith("event"):
-            continue
+        if raw_line.startswith(":"): continue
+        if raw_line.startswith("event"): continue
         if raw_line.startswith("data:"):
             buffer.append(raw_line[len("data:") :].strip())
             continue
         if raw_line == "":
-            if not buffer:
-                continue
+            if not buffer: continue
             payload = "\n".join(buffer).strip()
             buffer.clear()
-            if payload:
-                yield payload
+            if payload: yield payload
             continue
         buffer.append(raw_line.strip())
     if buffer:
         payload = "\n".join(buffer).strip()
-        if payload:
-            yield payload
+        if payload: yield payload
 
 
 def _model_variants(model: str) -> List[str]:
-    """Return ordered list of model identifiers to try."""
-
     variants = []
     base = model or "gemini-1.5-flash"
-
-    def add_variant(value: str) -> None:
-        if value not in variants:
-            variants.append(value)
-
+    def add_variant(value: str):
+        if value not in variants: variants.append(value)
     add_variant(base)
-    if not base.endswith("-latest"):
-        add_variant(f"{base}-latest")
-    if not base.endswith("-001"):
-        add_variant(f"{base}-001")
-    if not base.endswith("-002"):
-        add_variant(f"{base}-002")
+    if not base.endswith("-latest"): add_variant(f"{base}-latest")
     return variants
 
 
 def _compute_delta(chunk: str, prior: str) -> Tuple[str, str]:
-    """Return delta text and the new accumulated text."""
-
-    if not prior:
-        return chunk, chunk
+    if not prior: return chunk, chunk
     if chunk.startswith(prior):
         delta = chunk[len(prior) :]
         return (delta, chunk) if delta else ("", chunk)
-    if prior.startswith(chunk):
-        return "", prior
-    delta = chunk
-    updated = prior + delta
-    return delta, updated
-
-
-MARKDOWN_SYMBOLS = ["**", "__", "_", "`", "~~"]
+    if prior.startswith(chunk): return "", prior
+    return chunk, prior + chunk
 
 
 def _sanitize_delta(text: str) -> str:
-    """Remove markdown artefacts and tidy whitespace for streaming."""
-
     cleaned = text.replace("\r", "")
-    for symbol in MARKDOWN_SYMBOLS:
-        cleaned = cleaned.replace(symbol, "")
+    for symbol in ["**", "__", "_", "`", "~~"]: cleaned = cleaned.replace(symbol, "")
     cleaned = re.sub(r"^#{1,6}\s*", "", cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r"\*\s*", "", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -218,12 +192,8 @@ def _sanitize_delta(text: str) -> str:
 
 
 def _log_http_error(exc: httpx.HTTPStatusError) -> None:
-    safe_url = exc.request.url.copy_with(query=None) if exc.request else None
-    logger.warning(
-        "Gemini request failed: %s -> %s",
-        safe_url if safe_url else exc.request.url if exc.request else "unknown",
-        exc.response.status_code if exc.response else "no-response",
-    )
+    safe_url = exc.request.url.copy_with(query=None) if exc.request else "unknown_url"
+    logger.warning("Gemini request failed: %s -> %s", safe_url, exc.response.status_code if exc.response else "no-response")
 
 
 def _log_connected(model: str) -> None:
@@ -234,60 +204,40 @@ def _log_connected(model: str) -> None:
 
 
 def _extract_text(line: str) -> List[str]:
-    """Parse streaming JSON line from Gemini response and return text fragments."""
-
-    try:
-        data = json.loads(line)
-    except json.JSONDecodeError:
-        return []
-
+    try: data = json.loads(line)
+    except json.JSONDecodeError: return []
     chunks: List[str] = []
     for candidate in data.get("candidates", []):
         content = candidate.get("content", {})
         parts = content.get("parts", []) if isinstance(content, dict) else []
         for part in parts:
             text = part.get("text") if isinstance(part, dict) else None
-            if text:
-                chunks.append(text)
+            if text: chunks.append(text)
     return chunks
 
-
+# Sisa fungsi lainnya tetap sama, tidak perlu diubah.
+# summarize_for_memory, _split_sentences, etc.
 def summarize_for_memory(user_text: str) -> Tuple[str, str]:
-    """Produce a lightweight summary and category for storing memory."""
-
     normalized = " ".join(user_text.split())
     lower_text = normalized.lower()
-
-    if any(keyword in lower_text for keyword in ("todo", "kerjakan", "ingat untuk", "harus")):
-        category = "todo"
-    elif any(keyword in lower_text for keyword in ("suka", "favorit", "kesukaan", "prefer")):
-        category = "preference"
-    else:
-        category = "fact"
-
+    if any(keyword in lower_text for keyword in ("todo", "kerjakan", "ingat untuk", "harus")): category = "todo"
+    elif any(keyword in lower_text for keyword in ("suka", "favorit", "kesukaan", "prefer")): category = "preference"
+    else: category = "fact"
     sentences = _split_sentences(normalized)
     summary = " ".join(sentences[:3]) if sentences else normalized
-    if not summary.endswith("."):
-        summary = summary.rstrip(".") + "."
+    if not summary.endswith("."): summary = summary.rstrip(".") + "."
     return category, summary
 
 
 def _split_sentences(text: str) -> List[str]:
-    """Very small sentence splitter for basic summarisation."""
-
-    final: List[str] = []
-    buffer = []
-    terminators = {".", "?", "!"}
-
+    final, buffer, terminators = [], [], {".", "?", "!"}
     for char in text:
         buffer.append(char)
         if char in terminators:
             sentence = "".join(buffer).strip()
-            if sentence:
-                final.append(sentence)
+            if sentence: final.append(sentence)
             buffer = []
     if buffer:
         sentence = "".join(buffer).strip()
-        if sentence:
-            final.append(sentence)
+        if sentence: final.append(sentence)
     return final

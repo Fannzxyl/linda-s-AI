@@ -1,226 +1,126 @@
-import { MutableRefObject, useEffect, useState } from "react";
-import { EyeConfig } from "../config/eyes";
+import React, { useEffect, useRef, useState } from "react";
+import type { AvatarState } from "../types/avatar";
 
-const BLINK_MIN = 4000;
-const BLINK_MAX = 7000;
-const BLINK_DURATION = 120;
-
-type AvatarProps = {
-  eyeConfig: EyeConfig;
-  containerRef: MutableRefObject<HTMLDivElement | null>;
+type Props = {
+  state: AvatarState;
+  typing?: boolean;
 };
 
-type EyeOffsets = {
-  left: { x: number; y: number };
-  right: { x: number; y: number };
-};
+export default function Avatar({ state, typing = false }: Props) {
+  const wrap = useRef<HTMLDivElement>(null);
+  const [pupil, setPupil] = useState({ x: 0, y: 0 });
+  const [blink, setBlink] = useState(1);
 
-type EyeState = EyeOffsets & { blink: number };
-
-const randomBlinkInterval = () =>
-  BLINK_MIN + Math.random() * (BLINK_MAX - BLINK_MIN);
-
-const Avatar = ({ eyeConfig, containerRef }: AvatarProps) => {
-  const [state, setState] = useState<EyeState>({
-    left: { x: 0, y: 0 },
-    right: { x: 0, y: 0 },
-    blink: 1,
-  });
-
+  // Gerakan pupil mengikuti kursor
   useEffect(() => {
-    let animationFrame = 0;
-    let blinkPhase: "idle" | "closing" | "opening" = "idle";
-    let blinkStart = performance.now();
-    let nextBlinkAt = performance.now() + randomBlinkInterval();
-    let blinkValue = 1;
-    let isMounted = true;
-
-    const targets: EyeOffsets = {
-      left: { x: 0, y: 0 },
-      right: { x: 0, y: 0 },
+    const el = wrap.current;
+    if (!el) return;
+    const onMove = (e: MouseEvent) => {
+      const rect = el.getBoundingClientRect();
+      const nx = (e.clientX - rect.left) / rect.width - 0.5;
+      const ny = (e.clientY - rect.top) / rect.height - 0.5;
+      setPupil({ x: Math.max(-1, Math.min(1, nx)), y: Math.max(-1, Math.min(1, ny)) });
     };
-    const current: EyeOffsets = {
-      left: { x: 0, y: 0 },
-      right: { x: 0, y: 0 },
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
+  }, []);
+
+  // Animasi kedipan mata
+  useEffect(() => {
+    let stop = false;
+    const tick = () => {
+      if (stop) return;
+      const delay = state.wink ? 1800 : 1800 + Math.random() * 2000;
+      setTimeout(() => {
+        if (stop) return;
+        setBlink(0);
+        setTimeout(() => setBlink(1), 150);
+        tick();
+      }, state.blink === false ? 999999 : delay);
     };
+    tick();
+    return () => { stop = true; };
+  }, [state.blink, state.wink]);
 
-    const updateTargets = (event: MouseEvent) => {
-      const container = containerRef.current;
-      if (!container) return;
-      const rect = container.getBoundingClientRect();
-      const pointer = {
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-      };
-
-      targets.left = clampToRadius(
-        pointer,
-        eyeConfig.centerLeft,
-        eyeConfig.radiusMax,
-      );
-      targets.right = clampToRadius(
-        pointer,
-        eyeConfig.centerRight,
-        eyeConfig.radiusMax,
-      );
+  // Animasi goyang kepala
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    let t = 0;
+    const loop = () => {
+      t += 0.02 * state.headSwaySpeed;
+      el.style.transform = `translateY(${Math.sin(t) * 2}px) rotate(${Math.sin(t / 2) * 1.5}deg)`;
+      requestAnimationFrame(loop);
     };
-
-    const resetTargets = () => {
-      targets.left = { x: 0, y: 0 };
-      targets.right = { x: 0, y: 0 };
-    };
-
-    const handleVisibility = () => {
-      if (!document.hidden) {
-        blinkPhase = "idle";
-        blinkValue = 1;
-        nextBlinkAt = performance.now() + randomBlinkInterval();
-      }
-    };
-
-    const tick = (timestamp: number) => {
-      if (timestamp >= nextBlinkAt && blinkPhase === "idle") {
-        blinkPhase = "closing";
-        blinkStart = timestamp;
-      }
-
-      if (blinkPhase === "closing") {
-        const progress = Math.min(1, (timestamp - blinkStart) / BLINK_DURATION);
-        blinkValue = 1 - progress;
-        if (progress >= 1) {
-          blinkPhase = "opening";
-          blinkStart = timestamp;
-        }
-      } else if (blinkPhase === "opening") {
-        const progress = Math.min(1, (timestamp - blinkStart) / BLINK_DURATION);
-        blinkValue = progress;
-        if (progress >= 1) {
-          blinkPhase = "idle";
-          blinkValue = 1;
-          nextBlinkAt = timestamp + randomBlinkInterval();
-        }
-      }
-
-      current.left.x += (targets.left.x - current.left.x) * 0.18;
-      current.left.y += (targets.left.y - current.left.y) * 0.18;
-      current.right.x += (targets.right.x - current.right.x) * 0.18;
-      current.right.y += (targets.right.y - current.right.y) * 0.18;
-
-      if (isMounted) {
-        setState({
-          left: { ...current.left },
-          right: { ...current.right },
-          blink: Math.max(0.1, Math.min(1, blinkValue)),
-        });
-      }
-
-      animationFrame = requestAnimationFrame(tick);
-    };
-
-    window.addEventListener("mousemove", updateTargets);
-    window.addEventListener("mouseleave", resetTargets);
-    containerRef.current?.addEventListener("mouseleave", resetTargets);
-    document.addEventListener("visibilitychange", handleVisibility);
-    animationFrame = requestAnimationFrame(tick);
-
-    return () => {
-      isMounted = false;
-      window.removeEventListener("mousemove", updateTargets);
-      window.removeEventListener("mouseleave", resetTargets);
-      containerRef.current?.removeEventListener("mouseleave", resetTargets);
-      document.removeEventListener("visibilitychange", handleVisibility);
-      cancelAnimationFrame(animationFrame);
-    };
-  }, [containerRef, eyeConfig]);
-
-  const eyeRadiusX = 24;
-  const eyeRadiusY = 14;
-  const blinkScale = 0.25 + state.blink * 0.75;
+    loop();
+  }, [state.headSwaySpeed]);
 
   return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox="0 0 320 400"
-      style={{
-        position: "absolute",
-        inset: 0,
-        pointerEvents: "none",
-      }}
-    >
-      <Eye
-        center={eyeConfig.centerLeft}
-        offset={state.left}
-        rx={eyeRadiusX}
-        ry={eyeRadiusY * blinkScale}
-      />
-      <Eye
-        center={eyeConfig.centerRight}
-        offset={state.right}
-        rx={eyeRadiusX}
-        ry={eyeRadiusY * blinkScale}
-      />
-    </svg>
+    <div ref={wrap} className="avatar-wrapper" style={{
+      transition: "filter .6s",
+      filter: `drop-shadow(0 0 20px ${state.glow || "#a78bfa"})`
+    }}>
+      <svg viewBox="0 0 400 280" className="avatar-svg">
+        {/* Background Glow */}
+        <defs>
+          <radialGradient id="bgGlow" cx="50%" cy="45%">
+            <stop offset="0%" stopColor={state.glow || "#a78bfa"} stopOpacity="0.5" />
+            <stop offset="70%" stopColor="transparent" />
+          </radialGradient>
+        </defs>
+        <rect width="400" height="280" fill="url(#bgGlow)" />
+
+        {/* Rambut belakang */}
+        <path
+          d="M80,130 C90,50 310,50 320,130 C320,200 270,240 200,240 C130,240 80,200 80,130 Z"
+          fill="#1a2144"
+        />
+
+        {/* Kepala */}
+        <ellipse cx="200" cy="150" rx="110" ry="90" fill="#20294f" />
+
+        {/* Mata kiri */}
+        <Eye x={145} y={150} blink={blink} pupil={pupil} />
+        {/* Mata kanan */}
+        <Eye x={255} y={150} blink={blink} pupil={pupil} />
+
+        {/* Mulut */}
+        <g className={typing ? "mouth speaking" : "mouth"}>
+          <path
+            d="M170,195 Q200,205 230,195"
+            stroke="#f8cdd3"
+            strokeWidth="4"
+            fill="none"
+            strokeLinecap="round"
+          />
+        </g>
+      </svg>
+    </div>
   );
-};
+}
 
-type EyeProps = {
-  center: { x: number; y: number };
-  offset: { x: number; y: number };
-  rx: number;
-  ry: number;
-};
-
-const Eye = ({ center, offset, rx, ry }: EyeProps) => {
-  const highlightOffsetX = offset.x * 0.3;
-  const highlightOffsetY = offset.y * 0.3;
+function Eye({
+  x,
+  y,
+  blink,
+  pupil
+}: {
+  x: number;
+  y: number;
+  blink: number;
+  pupil: { x: number; y: number };
+}) {
+  const pupilOffsetX = pupil.x * 8;
+  const pupilOffsetY = pupil.y * 5;
+  const scaleY = blink;
 
   return (
     <g>
-      <ellipse
-        cx={center.x}
-        cy={center.y}
-        rx={rx}
-        ry={Math.max(ry, 3)}
-        fill="#f6f7ff"
-        stroke="#cdd0e8"
-        strokeWidth="1.5"
-      />
-      <circle
-        cx={center.x + offset.x}
-        cy={center.y + offset.y}
-        r={9}
-        fill="#3b4b7a"
-      />
-      <circle
-        cx={center.x + offset.x}
-        cy={center.y + offset.y}
-        r={6}
-        fill="#445ba5"
-      />
-      <circle
-        cx={center.x + offset.x + highlightOffsetX}
-        cy={center.y + offset.y + highlightOffsetY}
-        r={3}
-        fill="rgba(255,255,255,0.8)"
-      />
+      {/* Kelopak mata */}
+      <ellipse cx={x} cy={y} rx="30" ry={20 * scaleY} fill="#e4eaff" />
+      {/* Pupil */}
+      <circle cx={x + pupilOffsetX} cy={y + pupilOffsetY} r="10" fill="#1b254b" />
+      <circle cx={x + pupilOffsetX - 3} cy={y + pupilOffsetY - 3} r="3" fill="#fff" />
     </g>
   );
-};
-
-const clampToRadius = (
-  pointer: { x: number; y: number },
-  center: { x: number; y: number },
-  radius: number,
-) => {
-  const dx = pointer.x - center.x;
-  const dy = pointer.y - center.y;
-  const distance = Math.hypot(dx, dy);
-  if (distance === 0 || distance <= radius) {
-    return { x: dx, y: dy };
-  }
-  const scale = radius / distance;
-  return { x: dx * scale, y: dy * scale };
-};
-
-export default Avatar;
+}
