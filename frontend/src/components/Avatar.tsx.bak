@@ -1,214 +1,187 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-type Props = { persona?: string; typing?: boolean };
+export type Emotion = "neutral" | "happy" | "sad" | "angry" | "tsun" | "excited" | "calm";
+export type AvatarState = {
+  emotion: Emotion;
+  blink: boolean;
+  wink: boolean;
+  headSwaySpeed: number;
+  glow: string;
+};
 
-export default function Avatar({ persona = "ceria", typing = false }: Props) {
-  const wrapRef = useRef<HTMLDivElement>(null);
+type Props = { state: AvatarState; typing?: boolean };
 
-  const [tx, setTx] = useState(0);
-  const [ty, setTy] = useState(0);
-  const [eyeOpen, setEyeOpen] = useState(1);
+// Helper untuk Path Aset yang aman (BASE_URL-friendly)
+const base = (import.meta as any).env?.BASE_URL || "/";
+const asset = (name: string) => `${base}linda/${name}`;
 
-  const cur = useRef({ x: 0, y: 0, vx: 0, vy: 0 });
+const EMOTION_SRC: Record<Emotion, string> = {
+  neutral: asset("netral.png"),
+  happy: asset("senyum.png"),
+  sad: asset("sedih.png"),
+  angry: asset("netral.png"),
+  tsun: asset("wink.png"),
+  excited: asset("senyum.png"),
+  calm: asset("netral.png"),
+};
+
+const WINK_SRC = asset("wink.png");
+const BLINK_SRC = asset("merem.png");
+
+export default function Avatar({ state, typing = false }: Props) {
+  const frameRef = useRef<HTMLDivElement>(null);
+  
+  // State internal untuk cross-fade
+  const [backSrc, setBackSrc] = useState(EMOTION_SRC.neutral);
+  const [frontSrc, setFrontSrc] = useState(EMOTION_SRC.neutral);
+  const [frontShow, setFrontShow] = useState(true);
+  const [overlay, setOverlay] = useState<string | null>(null);
+  
+  // Ref untuk versioning (mencegah race condition cross-fade)
+  const verRef = useRef(0);
+  // Ref untuk melacak timer yang digunakan dalam cross-fade (micro-delay)
+  const crossFadeTimerRef = useRef<number | null>(null);
+
+  const targetSrc = useMemo(() => EMOTION_SRC[state.emotion] ?? EMOTION_SRC.neutral, [state.emotion]);
+
+  // Preload Semua Gambar Awal (Cache Warming)
   useEffect(() => {
-    let raf = 0;
-    const k = 0.12;
-    const d = 0.85;
-    const loop = () => {
-      const c = cur.current;
-      c.vx = d * (c.vx + k * (tx - c.x));
-      c.vy = d * (c.vy + k * (ty - c.y));
-      c.x += c.vx;
-      c.y += c.vy;
+    const preload = ["netral.png", "senyum.png", "sedih.png", "wink.png", "merem.png"];
+    preload.forEach((n) => {
+      const img = new Image();
+      img.src = asset(n);
+    });
+  }, []);
 
-      const el = wrapRef.current;
-      if (el) {
-        el.style.setProperty("--tx", String(c.x));
-        el.style.setProperty("--ty", String(c.y));
+  // Logic Cross-fade dengan Versioning, Decode, dan Micro-delay
+  useEffect(() => {
+    // 1. Bersihkan timer cross-fade lama jika ada perubahan state baru
+    if (crossFadeTimerRef.current) {
+        clearTimeout(crossFadeTimerRef.current);
+        crossFadeTimerRef.current = null;
+    }
+    
+    if (targetSrc === frontSrc) return;
+    
+    const ver = ++verRef.current;
+    const img = new Image();
+    img.src = targetSrc;
+
+    const apply = async () => {
+      try { await img.decode?.(); } catch {}
+      
+      if (ver !== verRef.current) return;
+      
+      // 1. Pindahkan dan siapkan transisi
+      setBackSrc(frontSrc);
+      setFrontSrc(targetSrc);
+      setFrontShow(false);
+      
+      // 2. Tambahkan Micro-delay (misalnya 50ms) sebelum opacity diubah ke 1
+      // Ini memberi waktu browser untuk memastikan opacity 0 sudah diterapkan oleh CSS.
+      crossFadeTimerRef.current = setTimeout(() => {
+          if (ver !== verRef.current) return;
+          // Menggunakan requestAnimationFrame untuk memastikan set state terjadi di frame berikutnya
+          requestAnimationFrame(() => {
+              if (ver !== verRef.current) return;
+              setFrontShow(true); 
+          });
+      }, 50) as unknown as number;
+    };
+
+    img.onload = apply;
+    
+    img.onerror = () => {
+      if (ver !== verRef.current) return;
+      setBackSrc(EMOTION_SRC.neutral);
+      setFrontSrc(EMOTION_SRC.neutral);
+      setFrontShow(true);
+      console.error("Gagal memuat aset avatar:", targetSrc);
+    };
+
+    // Bersihkan versioning dan timer saat cleanup
+    return () => { 
+        verRef.current++; 
+        if (crossFadeTimerRef.current) {
+            clearTimeout(crossFadeTimerRef.current);
+        }
+    };
+  }, [targetSrc, frontSrc]);
+
+  // Logic Blink/Wink Overlay (dengan Timer Pooling untuk Stabilitas)
+  useEffect(() => {
+    let stopped = false;
+    const timers: number[] = []; // Array untuk menampung semua ID timeout
+
+    // Helper untuk membuat dan melacak timeout
+    const setT = (ms: number, fn: () => void) => {
+        const id = setTimeout(fn, ms) as unknown as number;
+        timers.push(id);
+        return id;
+    };
+
+    const cycle = () => {
+      if (stopped) return;
+      
+      if (state.wink) {
+        setOverlay(WINK_SRC);
+        setT(160, () => setOverlay(null));
+        setT(1800, cycle);
+      } else if (state.blink) {
+        const wait = 1800 + Math.random() * 2200; // Random interval 1.8s - 4.0s
+        setT(wait, () => {
+          if (stopped) return; 
+          setOverlay(BLINK_SRC);
+          setT(120, () => setOverlay(null));
+          setT(600, cycle); // Lanjut siklus setelah jeda
+        });
+      } else {
+        // Mode tanpa animasi mata
+        setT(2000, cycle);
       }
+    };
+
+    cycle();
+
+    // Cleanup: Bersihkan semua timeout
+    return () => { 
+        stopped = true; 
+        timers.forEach(clearTimeout); 
+    };
+  }, [state.blink, state.wink]);
+
+  // Logic Head Sway (Goyangan Halus)
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return;
+    let t = 0, raf = 0;
+    const loop = () => {
+      t += 0.015 * state.headSwaySpeed;
+      // Transformasi 3D kecil
+      el.style.transform = `translate3d(${Math.sin(t)*0.6}px,${Math.cos(t/1.6)*0.8}px,0)`;
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [tx, ty]);
-
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-
-    const setFromClient = (cx: number, cy: number) => {
-      const r = el.getBoundingClientRect();
-      const nx = (cx - (r.left + r.width / 2)) / (r.width / 2);
-      const ny = (cy - (r.top + r.height / 2)) / (r.height / 2);
-      setTx(Math.max(-1, Math.min(1, nx)));
-      setTy(Math.max(-1, Math.min(1, ny)));
-    };
-
-    const onMove = (e: MouseEvent) => setFromClient(e.clientX, e.clientY);
-    const onTouch = (e: TouchEvent) => {
-      const t = e.touches[0];
-      if (!t) return;
-      setFromClient(t.clientX, t.clientY);
-    };
-
-    el.addEventListener("mousemove", onMove);
-    el.addEventListener("touchmove", onTouch, { passive: true });
-
-    const onGyro = (e: DeviceOrientationEvent) => {
-      const gx = (e.gamma ?? 0) / 30;
-      const gy = (e.beta ?? 0) / 45;
-      setTx(Math.max(-1, Math.min(1, gx)));
-      setTy(Math.max(-1, Math.min(1, gy)));
-    };
-    window.addEventListener("deviceorientation", onGyro);
-
-    return () => {
-      el.removeEventListener("mousemove", onMove);
-      el.removeEventListener("touchmove", onTouch);
-      window.removeEventListener("deviceorientation", onGyro);
-    };
-  }, []);
-
-  useEffect(() => {
-    let stop = false;
-    const tick = () => {
-      if (stop) return;
-      const wait = 1500 + Math.random() * 3000;
-      setTimeout(() => {
-        if (stop) return;
-        setEyeOpen(0);
-        setTimeout(() => setEyeOpen(1), 120);
-        tick();
-      }, wait);
-    };
-    tick();
-    return () => {
-      stop = true;
-    };
-  }, []);
-
-  const ring =
-    persona === "tsundere"
-      ? "#f38bb3"
-      : persona === "formal"
-      ? "#93b4ff"
-      : persona === "santai"
-      ? "#9ae6b4"
-      : persona === "netral"
-      ? "#a3a3a3"
-      : "#a78bfa";
+  }, [state.headSwaySpeed]);
 
   return (
-    <div ref={wrapRef} className="avatar-wrap">
-      <svg viewBox="0 0 400 260" className="avatar-svg" role="img" aria-label="Linda Avatar">
-        <defs>
-          <radialGradient id="glow" cx="50%" cy="45%">
-            <stop offset="0%" stopColor={ring} stopOpacity="0.35" />
-            <stop offset="70%" stopColor="#0b1220" stopOpacity="0.05" />
-            <stop offset="100%" stopColor="#0b1220" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-
-        <rect x="0" y="0" width="400" height="260" fill="url(#glow)" />
-
-        <g className="head">
-          <g className="hair-back">
-            <path
-              d="M70,100 C120,40 280,40 330,100 C330,150 310,200 200,210 C90,200 70,150 70,100 Z"
-              fill="#1a2340"
-            />
-          </g>
-
-          <g>
-            <ellipse cx="200" cy="120" rx="120" ry="85" fill="#1e2747" />
-            <ellipse cx="200" cy="118" rx="118" ry="83" fill="#222d54" />
-          </g>
-
-          <g className="hair-front">
-            <path
-              d="M120,60 C130,80 110,120 130,135"
-              stroke="#2a3764"
-              strokeWidth="10"
-              strokeLinecap="round"
-              fill="none"
-            />
-            <path
-              d="M280,60 C270,80 290,120 270,135"
-              stroke="#2a3764"
-              strokeWidth="10"
-              strokeLinecap="round"
-              fill="none"
-            />
-          </g>
-
-          <Eye x={150} y={120} open={eyeOpen} />
-          <Eye x={250} y={120} open={eyeOpen} />
-
-          <g className={typing ? "mouth speaking" : "mouth"}>
-            <path
-              d="M180,165 Q200,175 220,165"
-              stroke="#f3cbd3"
-              strokeWidth="4"
-              fill="none"
-              strokeLinecap="round"
-            />
-          </g>
-        </g>
-      </svg>
+    <div className="avatar-frame" ref={frameRef}>
+      {/* Gambar Belakang: Selalu terlihat */}
+      <img src={backSrc} alt="linda-back" className="avatar-img back" draggable={false} 
+           onError={(e) => {(e.currentTarget as HTMLImageElement).src = EMOTION_SRC.neutral;}} />
+      
+      {/* Gambar Depan: Transisi fade (show/hide) */}
+      <img src={frontSrc} alt="linda-front" className={`avatar-img front ${frontShow ? "show" : "hide"}`} draggable={false}
+           onError={(e) => {(e.currentTarget as HTMLImageElement).src = EMOTION_SRC.neutral;}} />
+      
+      {/* Overlay: Blink/Wink */}
+      {overlay && <img src={overlay} alt="overlay" className="avatar-overlay show" draggable={false} 
+                       onError={(e) => {(e.currentTarget as HTMLImageElement).style.display = "none";}} />}
+      
+      {/* Glow Mengetik */}
+      <div className="avatar-speaking" style={{ opacity: typing ? 1 : 0 }} />
     </div>
   );
 }
 
-function Eye({ x, y, open }: { x: number; y: number; open: number }) {
-  const [p, setP] = useState({ x: 0, y: 0 });
-  useEffect(() => {
-    const el = document.querySelector(".avatar-wrap") as HTMLDivElement | null;
-    let raf = 0;
-    const read = () => {
-      if (el) {
-        const tx = parseFloat(getComputedStyle(el).getPropertyValue("--tx")) || 0;
-        const ty = parseFloat(getComputedStyle(el).getPropertyValue("--ty")) || 0;
-        setP({ x: tx, y: ty });
-      }
-      raf = requestAnimationFrame(read);
-    };
-    raf = requestAnimationFrame(read);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  const r = 10;
-  const px = x + p.x * r;
-  const py = y + p.y * r;
-
-  const lid = Math.max(0, Math.min(1, open));
-  const lidScale = 0.25 + 0.75 * lid;
-
-  return (
-    <g>
-      <ellipse cx={x} cy={y} rx="34" ry="24" fill="#eaf2ff" />
-      <g transform={`translate(${px - x}, ${py - y})`}>
-        <circle cx={x} cy={y} r="15" fill="#6aa3ff" />
-        <circle cx={x} cy={y} r="8" fill="#1b2a4d" />
-        <circle cx={x - 4} cy={y - 4} r="3" fill="#fff" />
-      </g>
-      <g transform={`translate(0, ${y}) scale(1, ${lidScale}) translate(0, ${-y})`}>
-        <path
-          d={`M${x - 36},${y} Q${x},${y - 30} ${x + 36},${y}`}
-          stroke="#1b2342"
-          strokeWidth="10"
-          fill="none"
-          strokeLinecap="round"
-        />
-      </g>
-      <g transform={`translate(0, ${y}) scale(1, ${lidScale}) translate(0, ${-y})`}>
-        <path
-          d={`M${x - 30},${y + 8} Q${x},${y + 18} ${x + 30},${y + 8}`}
-          stroke="#1b2342"
-          strokeWidth="6"
-          fill="none"
-          strokeLinecap="round"
-        />
-      </g>
-    </g>
-  );
-}

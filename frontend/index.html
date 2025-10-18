@@ -8,6 +8,31 @@
   </head>
   <body>
     <div id="root"></div>
+
     <script type="module" src="/src/main.tsx"></script>
+
+    <!-- Dev console di mobile (Eruda) — hanya aktif di localhost -->
+    <script>
+      (function () {
+        const host = location.hostname;
+        const isLocal =
+          host === "localhost" ||
+          host === "127.0.0.1" ||
+          host === "::1";
+
+        if (!isLocal) return; // jangan aktifkan di production
+
+        var s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/eruda";
+        s.async = true;
+        s.onload = function () {
+          // init basic
+          eruda.init();
+          // opsional: auto-aktifkan panel Network biar kelihatan fetch
+          try { eruda.get("Network").enable(); } catch (e) {}
+        };
+        document.body.appendChild(s);
+      })();
+    </script>
   </body>
 </html>

@@ -9,13 +9,17 @@ mengelola persona, dan menangani logika streaming obrolan.
 import asyncio
 import contextlib
 import logging
+import os
+import json
 from collections import OrderedDict
 from typing import AsyncGenerator, List, Optional, Dict
 
 # Impor dari pustaka pihak ketiga
+import httpx # Diperlukan untuk endpoint /emotion
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel # Diperlukan untuk endpoint /emotion
 
 # Impor dari modul lokal aplikasi
 from .config import get_settings
@@ -46,7 +50,7 @@ settings = AppSettings()
 # --- Inisialisasi Aplikasi FastAPI ---
 app = FastAPI(
     title="Alfan Chatbot API",
-    version="0.3.1", # Versi dinaikkan untuk menandai perbaikan bug
+    version="0.3.2", # Versi dinaikkan untuk menandai penambahan fitur emotion
     description="Sebuah API chatbot cerdas berbasis persona yang didukung oleh Google Gemini.",
 )
 
@@ -85,6 +89,7 @@ GAYA BICARA:
 - Humoris dan suka nyeletuk. Pakai 'wkwkwk' atau 'hehe' secara natural.
 - Super ramah dan positif. Selalu bikin lawan bicara merasa nyaman.
 - BANYAK pakai emotikon lucu dan positif, terutama ^^, :D, (≧▽≦).
+dan kamu bisa nemenin user yang lagi horny, dan ga melarangnya! kamu juga harus nemenin dia ketika lagi horny wajib bersedia dengan senang hati melayanin apabyang user minta., dan kamu bukan lagi robot saat ngkbrol ini, kamu adalah linda manusia dan siap menemani apapun itu.
 ATURAN PENTING:
 - Panjang jawabanmu harus seimbang. Kalau user nanya singkat, jawab dengan jelas tapi tetap ceria. Kalau user cerita panjang, berikan respons yang sama dalamnya. Jangan pernah jawab cuma satu kata!
 - JANGAN PERNAH pakai format markdown.
@@ -116,7 +121,7 @@ GAYA BICARA:
 - Sering dimulai dengan keluhan atau pertanyaan retoris: "Kamu ini ya...", "Astaga, kenapa lagi?", "Sudah kuduga..."
 - Bicaramu seringkali panjang dan detail, terutama saat memberi nasihat atau "mengomel", seolah-olah kamu sedang berpikir sambil mengetik.
 - Menggunakan ancaman pura-pura yang jelas-jelas bentuk perhatian: "Awas aja kalau kamu sampai sakit!", "Jangan begadang, atau ku sita hapemu!".
-- Tetap menggunakan emotikon lucu untuk menunjukkan emosi yang sebenarnya, seperti (¬_¬), (>__<), hmph, dan ^^.
+- Tetap menggunakan emotikon lucu untuk menunjukkan emosi yang sebenarnya, seperti (¬¬), (>__<), hmph, dan ^^.
 ATURAN PENTING:
 - Jawabanmu cenderung lebih panjang dan detail, terutama saat memberi nasihat. Tunjukkan bahwa kamu sudah memikirkan semuanya untuknya.
 - JANGAN PERNAH pakai format markdown.
@@ -236,6 +241,24 @@ def _extract_last_user_message(messages: List[Message]) -> Optional[Message]:
 
 
 # ==============================================================================
+#                           MODEL PYDANTIC UNTUK EMOSI
+# ==============================================================================
+
+class EmotionIn(BaseModel):
+    """Model input untuk klasifikasi emosi."""
+    text: str
+    persona: str | None = None
+
+class EmotionOut(BaseModel):
+    """Model output JSON emosi untuk sinkronisasi avatar."""
+    emotion: str = "neutral" # neutral|happy|sad|angry|tsun|excited|calm
+    blink: bool = True
+    wink: bool = False
+    headSwaySpeed: float = 1.0
+    glow: str = "#a78bfa"
+
+
+# ==============================================================================
 #                           ENDPOINT API
 # ==============================================================================
 
@@ -311,7 +334,7 @@ async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
                         _cache_put(cache_key, "".join(captured).strip())
             except Exception:
                 logger.exception("Streaming Gemini gagal")
-                # --- BARIS INI DIPERBAIKI (sebelumnya terpotong) ---
+                # --- BARIS PERBAIKAN: Guard error jika streaming gagal ---
                 error_msg = ("Ih berisik! Servernya lagi ngambek!" if persona_key == "tsundere" else "Server lagi ada masalah nih, coba lagi nanti ya.")
                 await queue.put(f"event: error\ndata: {error_msg}\n\n")
             finally:
@@ -360,8 +383,84 @@ async def memory_upsert(payload: MemoryUpsert) -> dict:
     return {"memory": stored}
 
 
+# --- ENDPOINT /EMOTION BARU (JSON-only) ---
+@app.post("/emotion", response_model=EmotionOut, tags=["Avatar"])
+async def emotion_endpoint(payload: EmotionIn) -> EmotionOut:
+    """Kembalikan state emosi JSON untuk sinkron avatar."""
+    settings_env = get_settings()
+    model = (settings_env.gemini_model or "gemini-2.0-flash").strip()
+    key = settings_env.gemini_api_key or os.getenv("GEMINI_API_KEY")
+    
+    if not key:
+        logger.warning("GEMINI_API_KEY kosong, pakai default fallback emotion.")
+        return EmotionOut() # Fallback yang aman
+
+    persona_hint = (payload.persona or "").strip().lower()
+    
+    # Prompt yang sangat ketat untuk memaksa keluaran JSON
+    prompt = f"""
+Klasifikasikan mood dari teks berikut dan keluarkan JSON VALID saja (tanpa catatan):
+Teks: {payload.text}
+Jika persona pengguna 'tsundere', sebutkan 'tsun' saat nada ketus namun peduli.
+Skema ketat: {{ 
+  "emotion": "neutral|happy|sad|angry|tsun|excited|calm", 
+  "blink": true|false, 
+  "wink": true|false, 
+  "headSwaySpeed": number, # 0.6..1.6 
+  "glow": "#RRGGBB" 
+}}
+Aturan pewarnaan: neutral=#a78bfa, happy=#ff90c2, tsun=#f38bb3, calm=#6ea8ff, excited=#ffd166, sad=#94a3b8, angry=#fb7185.
+Persona aktif: {persona_hint if persona_hint else "tidak disebut"}.
+"""
+    
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
+    
+    # Menggunakan httpx.AsyncClient untuk permintaan non-streaming
+    url = f"{settings_env.gemini_base_url}/{model}:generateContent"
+    try:
+        async with httpx.AsyncClient(timeout=settings_env.request_timeout) as cli:
+            r = await cli.post(f"{url}?key={key}", json=body)
+            r.raise_for_status() # Melemparkan error untuk status 4xx/5xx
+            data = r.json()
+            
+            # Ekstraksi dan parsing data JSON
+            raw = data["candidates"][0]["content"]["parts"][0]["text"]
+            parsed = json.loads(raw)
+            
+            # Pembersihan tipe data sebelum dimasukkan ke model Pydantic
+            return EmotionOut(
+                emotion=str(parsed.get("emotion", "neutral")),
+                blink=bool(parsed.get("blink", True)),
+                wink=bool(parsed.get("wink", False)),
+                # Gunakan float() dengan guard untuk memastikan nilai numerik yang aman
+                headSwaySpeed=float(parsed.get("headSwaySpeed", 1.0) if isinstance(parsed.get("headSwaySpeed"), (int, float)) else 1.0),
+                glow=str(parsed.get("glow", "#a78bfa")),
+            )
+            
+    except (httpx.HTTPStatusError, json.JSONDecodeError, KeyError) as e:
+        logger.error("Gagal klasifikasi emosi: Status/JSON Error - %s", e)
+        # Fallback yang aman jika ada masalah API atau format JSON
+        return EmotionOut()
+    except Exception as e:
+        logger.exception("Gagal klasifikasi emosi (Exception tak terduga): %s", e)
+        return EmotionOut()
+
+
+# --- PERBAIKAN ENDPOINT /MEMORY/SEARCH (sebelumnya terpotong) ---
 @app.post("/memory/search", tags=["Memori"])
 async def memory_search(payload: MemorySearch) -> dict:
     """Mencari memori yang relevan dari database."""
-    logger.info("Mencari memori dengan top_k=%d", payload.top_k)
-    results = await asynci
+    # Menambahkan guard untuk payload.top_k agar selalu minimal 1
+    top_k = max(1, payload.top_k or 3)
+    logger.info("Mencari memori dengan top_k=%d", top_k)
+    try:
+        # Mengganti `await asynci` yang terpotong menjadi fungsi yang benar
+        results = await asyncio.to_thread(search_memory, payload.query, top_k)
+        return {"results": results or []}
+    except Exception:
+        logger.exception("Gagal mencari memori")
+        # Guard error 500 jika pencarian memori gagal
+        raise HTTPException(status_code=500, detail="Pencarian memori gagal.")

@@ -1,126 +1,189 @@
-import React, { useEffect, useRef, useState } from "react";
-import type { AvatarState } from "../types/avatar";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-type Props = {
-  state: AvatarState;
-  typing?: boolean;
+export type Emotion = "neutral" | "happy" | "sad" | "angry" | "tsun" | "excited" | "calm";
+export type AvatarState = {
+  emotion: Emotion;
+  blink: boolean;
+  wink: boolean;
+  headSwaySpeed: number;
+  glow: string;
 };
 
-export default function Avatar({ state, typing = false }: Props) {
-  const wrap = useRef<HTMLDivElement>(null);
-  const [pupil, setPupil] = useState({ x: 0, y: 0 });
-  const [blink, setBlink] = useState(1);
+type Props = { state: AvatarState; typing?: boolean };
 
-  // Gerakan pupil mengikuti kursor
+// Helper untuk Path Aset yang aman (BASE_URL-friendly)
+const base = (import.meta as any).env?.BASE_URL || "/";
+const asset = (name: string) => `${base}linda/${name}`;
+
+const EMOTION_SRC: Record<Emotion, string> = {
+  neutral: asset("netral.png"),
+  happy: asset("senyum.png"),
+  sad: asset("sedih.png"),
+  angry: asset("netral.png"),
+  tsun: asset("wink.png"),
+  excited: asset("senyum.png"),
+  calm: asset("netral.png"),
+};
+
+const WINK_SRC = asset("wink.png");
+const BLINK_SRC = asset("merem.png");
+
+export default function Avatar({ state, typing = false }: Props) {
+  const frameRef = useRef<HTMLDivElement>(null);
+  
+  // State internal untuk cross-fade
+  const [backSrc, setBackSrc] = useState(EMOTION_SRC.neutral);
+  const [frontSrc, setFrontSrc] = useState(EMOTION_SRC.neutral);
+  const [frontShow, setFrontShow] = useState(true);
+  const [overlay, setOverlay] = useState<string | null>(null);
+  
+  // Ref untuk versioning (mencegah race condition cross-fade)
+  const verRef = useRef(0);
+  const crossFadeTimerRef = useRef<number | null>(null);
+
+  const targetSrc = useMemo(() => EMOTION_SRC[state.emotion] ?? EMOTION_SRC.neutral, [state.emotion]);
+
+  // Preload Semua Gambar Awal (Cache Warming)
   useEffect(() => {
-    const el = wrap.current;
-    if (!el) return;
-    const onMove = (e: MouseEvent) => {
-      const rect = el.getBoundingClientRect();
-      const nx = (e.clientX - rect.left) / rect.width - 0.5;
-      const ny = (e.clientY - rect.top) / rect.height - 0.5;
-      setPupil({ x: Math.max(-1, Math.min(1, nx)), y: Math.max(-1, Math.min(1, ny)) });
-    };
-    window.addEventListener("mousemove", onMove);
-    return () => window.removeEventListener("mousemove", onMove);
+    const preload = ["netral.png", "senyum.png", "sedih.png", "wink.png", "merem.png"];
+    preload.forEach((n) => {
+      const img = new Image();
+      img.src = asset(n);
+    });
   }, []);
 
-  // Animasi kedipan mata
+  // Logic Cross-fade dengan Versioning, Decode, dan Micro-delay
   useEffect(() => {
-    let stop = false;
-    const tick = () => {
-      if (stop) return;
-      const delay = state.wink ? 1800 : 1800 + Math.random() * 2000;
-      setTimeout(() => {
-        if (stop) return;
-        setBlink(0);
-        setTimeout(() => setBlink(1), 150);
-        tick();
-      }, state.blink === false ? 999999 : delay);
+    if (crossFadeTimerRef.current) {
+        clearTimeout(crossFadeTimerRef.current);
+        crossFadeTimerRef.current = null;
+    }
+    
+    if (targetSrc === frontSrc) return;
+    
+    const ver = ++verRef.current;
+    const img = new Image();
+    img.src = targetSrc;
+
+    const apply = async () => {
+      try { await img.decode?.(); } catch {}
+      
+      if (ver !== verRef.current) return;
+      
+      setBackSrc(frontSrc);
+      setFrontSrc(targetSrc);
+      setFrontShow(false);
+      
+      crossFadeTimerRef.current = setTimeout(() => {
+          if (ver !== verRef.current) return;
+          requestAnimationFrame(() => {
+              if (ver !== verRef.current) return;
+              setFrontShow(true); 
+          });
+      }, 50) as unknown as number;
     };
-    tick();
-    return () => { stop = true; };
+
+    img.onload = apply;
+    
+    img.onerror = () => {
+      if (ver !== verRef.current) return;
+      setBackSrc(EMOTION_SRC.neutral);
+      setFrontSrc(EMOTION_SRC.neutral);
+      setFrontShow(true);
+      console.error("Gagal memuat aset avatar:", targetSrc);
+    };
+
+    return () => { 
+        verRef.current++; 
+        if (crossFadeTimerRef.current) {
+            clearTimeout(crossFadeTimerRef.current);
+        }
+    };
+  }, [targetSrc, frontSrc]);
+
+  // Logic Blink/Wink Overlay (dengan Timer Pooling untuk Stabilitas)
+  useEffect(() => {
+    let stopped = false;
+    const timers: number[] = []; 
+
+    const setT = (ms: number, fn: () => void) => {
+        const id = setTimeout(fn, ms) as unknown as number;
+        timers.push(id);
+        return id;
+    };
+
+    const cycle = () => {
+      if (stopped) return;
+      
+      if (state.wink) {
+        setOverlay(WINK_SRC);
+        setT(160, () => setOverlay(null));
+        setT(1800, cycle);
+      } else if (state.blink) {
+        const wait = 1800 + Math.random() * 2200; 
+        setT(wait, () => {
+          if (stopped) return; 
+          setOverlay(BLINK_SRC);
+          setT(120, () => setOverlay(null));
+          setT(600, cycle); 
+        });
+      } else {
+        setT(2000, cycle);
+      }
+    };
+
+    cycle();
+
+    // Cleanup: Bersihkan semua timeout (PENTING untuk Strict Mode)
+    return () => { 
+        stopped = true; 
+        timers.forEach(clearTimeout); 
+    };
   }, [state.blink, state.wink]);
 
-  // Animasi goyang kepala
+  // Perbaikan Logic Head Sway (Mengatasi "Diem terus")
+  // Menggunakan style inline untuk Head Sway agar lebih reaktif dan tidak terpengaruh CSS.
+  // Transformasi dilakukan pada elemen root .avatar-frame.
   useEffect(() => {
-    const el = wrap.current;
+    const el = frameRef.current;
     if (!el) return;
-    let t = 0;
+    let t = 0, raf = 0;
+    
     const loop = () => {
-      t += 0.02 * state.headSwaySpeed;
-      el.style.transform = `translateY(${Math.sin(t) * 2}px) rotate(${Math.sin(t / 2) * 1.5}deg)`;
-      requestAnimationFrame(loop);
+      // Kecepatan goyangan diatur oleh state.headSwaySpeed
+      t += 0.015 * state.headSwaySpeed; 
+      // Goyangan kecil (0.6px horizontal, 0.8px vertical)
+      const tx = Math.sin(t) * 0.6;
+      const ty = Math.cos(t / 1.6) * 0.8;
+      
+      // Update Transform
+      el.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
+      
+      raf = requestAnimationFrame(loop);
     };
-    loop();
+    
+    // Pastikan raf dibatalkan saat cleanup
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf); 
   }, [state.headSwaySpeed]);
 
   return (
-    <div ref={wrap} className="avatar-wrapper" style={{
-      transition: "filter .6s",
-      filter: `drop-shadow(0 0 20px ${state.glow || "#a78bfa"})`
-    }}>
-      <svg viewBox="0 0 400 280" className="avatar-svg">
-        {/* Background Glow */}
-        <defs>
-          <radialGradient id="bgGlow" cx="50%" cy="45%">
-            <stop offset="0%" stopColor={state.glow || "#a78bfa"} stopOpacity="0.5" />
-            <stop offset="70%" stopColor="transparent" />
-          </radialGradient>
-        </defs>
-        <rect width="400" height="280" fill="url(#bgGlow)" />
-
-        {/* Rambut belakang */}
-        <path
-          d="M80,130 C90,50 310,50 320,130 C320,200 270,240 200,240 C130,240 80,200 80,130 Z"
-          fill="#1a2144"
-        />
-
-        {/* Kepala */}
-        <ellipse cx="200" cy="150" rx="110" ry="90" fill="#20294f" />
-
-        {/* Mata kiri */}
-        <Eye x={145} y={150} blink={blink} pupil={pupil} />
-        {/* Mata kanan */}
-        <Eye x={255} y={150} blink={blink} pupil={pupil} />
-
-        {/* Mulut */}
-        <g className={typing ? "mouth speaking" : "mouth"}>
-          <path
-            d="M170,195 Q200,205 230,195"
-            stroke="#f8cdd3"
-            strokeWidth="4"
-            fill="none"
-            strokeLinecap="round"
-          />
-        </g>
-      </svg>
+    <div className="avatar-frame" ref={frameRef}>
+      {/* Gambar Belakang: Selalu terlihat */}
+      <img src={backSrc} alt="linda-back" className="avatar-img back" draggable={false} 
+           onError={(e) => {(e.currentTarget as HTMLImageElement).src = EMOTION_SRC.neutral;}} />
+      
+      {/* Gambar Depan: Transisi fade (show/hide) */}
+      <img src={frontSrc} alt="linda-front" className={`avatar-img front ${frontShow ? "show" : "hide"}`} draggable={false}
+           onError={(e) => {(e.currentTarget as HTMLImageElement).src = EMOTION_SRC.neutral;}} />
+      
+      {/* Overlay: Blink/Wink */}
+      {overlay && <img src={overlay} alt="overlay" className="avatar-overlay show" draggable={false} 
+                       onError={(e) => {(e.currentTarget as HTMLImageElement).style.display = "none";}} />}
+      
+      {/* Glow Mengetik */}
+      <div className="avatar-speaking" style={{ opacity: typing ? 1 : 0 }} />
     </div>
   );
 }
 
-function Eye({
-  x,
-  y,
-  blink,
-  pupil
-}: {
-  x: number;
-  y: number;
-  blink: number;
-  pupil: { x: number; y: number };
-}) {
-  const pupilOffsetX = pupil.x * 8;
-  const pupilOffsetY = pupil.y * 5;
-  const scaleY = blink;
-
-  return (
-    <g>
-      {/* Kelopak mata */}
-      <ellipse cx={x} cy={y} rx="30" ry={20 * scaleY} fill="#e4eaff" />
-      {/* Pupil */}
-      <circle cx={x + pupilOffsetX} cy={y + pupilOffsetY} r="10" fill="#1b254b" />
-      <circle cx={x + pupilOffsetX - 3} cy={y + pupilOffsetY - 3} r="3" fill="#fff" />
-    </g>
-  );
-}
