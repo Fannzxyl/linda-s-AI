@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from .config import get_settings
 from .schemas import ChatRequest, MemorySearch, MemoryUpsert, Message
 from .services.llm import call_gemini_stream, prepare_system_prompt
-# IMPOR KRUSIAL: clear_memory_db sudah ditambahkan dan diasumsikan ada di services/memory.py
+# Diasumsikan semua impor ini sudah benar setelah perbaikan sebelumnya
 from .services.memory import init_db, search_memory, upsert_memory, clear_memory_db 
 
 # --- Konfigurasi Dasar ---
@@ -130,7 +130,7 @@ Nama Anda Linda. Anda adalah asisten AI yang profesional, sopan, dan berpengetah
 GAYA BICARA:
 - Gunakan Bahasa Indonesia yang baik, benar, dan formal.
 - Struktur jawaban Anda jelas dan logis.
-ATURAN PENTING:
+ATURAN PENTURAN:
 - Berikan jawaban yang komprehensif namun tetap ringkas. 
 - Jawaban boleh terstruktur, namun hindari format Markdown kecuali sangat diperlukan.
 """
@@ -246,12 +246,12 @@ async def health_check() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-# --- ENDPOINT /API/RESET (PERBAIKAN ERROR 404) ---
-@app.post("/api/reset", tags=["Utilitas"])
+# --- ENDPOINT /API/RESET ---
+# PERBAIKAN: Mengubah path dari "/api/reset" menjadi "/reset"
+@app.post("/reset", tags=["Utilitas"])
 async def reset_session_memory():
     """Endpoint untuk mereset seluruh memori (database) dan cache."""
     try:
-        # Panggilan ke fungsi yang baru kita tambahkan di memory.py
         await asyncio.to_thread(clear_memory_db) 
         _response_cache.clear()
         logger.info("Database memori dan cache obrolan BERHASIL direset.")
@@ -260,11 +260,14 @@ async def reset_session_memory():
         logger.error("Gagal mereset database: %s", e)
         raise HTTPException(status_code=500, detail="Gagal mereset memori database.")
 
-# --- ENDPOINT /CHAT ---
+# --- ENDPOINT /CHAT (UPGRADE MULTIMODAL & PERBAIKAN ROUTING) ---
+# PERBAIKAN KRUSIAL: Mengubah path dari "/api/chat" menjadi "/chat"
 @app.post("/chat", tags=["Chat"])
 async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
     """Endpoint utama untuk menangani percakapan obrolan melalui streaming."""
-    logger.info("Menerima permintaan obrolan.")
+    logger.info("Menerima permintaan obrolan (Multimodal: %s)", 
+                "Ada Gambar" if payload.image_base64 else "Hanya Teks")
+    
     _validate_messages(payload.messages) 
     
     clean_messages = _clean_interrupted_assistant_messages(payload.messages)
@@ -287,7 +290,8 @@ async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
     cached_text: Optional[str] = None
     last_user_content = last_user_message.content.strip() if last_user_message else ""
     if last_user_content:
-        cache_key = (persona_key, last_user_content.lower())
+        # Tambahkan image_base64 ke cache key untuk multimodal
+        cache_key = (persona_key, last_user_content.lower(), payload.image_base64 or "")
         cached_text = _cache_get(cache_key)
         
     system_prompt = prepare_system_prompt(
@@ -309,7 +313,13 @@ async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
                         await queue.put(f"event: token\ndata: {chunk}\n\n")
                 else:
                     captured: list[str] = []
-                    async for token in call_gemini_stream(clean_messages, system_prompt, delay_seconds=delay):
+                    # PANGGILAN LLM DENGAN MULTIMODAL
+                    async for token in call_gemini_stream(
+                        clean_messages, 
+                        system_prompt, 
+                        image_base64=payload.image_base64, 
+                        delay_seconds=delay
+                    ):
                         captured.append(token)
                         await queue.put(f"event: token\ndata: {token}\n\n")
                     if cache_key and captured:
@@ -355,6 +365,8 @@ async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 
+# --- ENDPOINT MEMORY/UPSERT ---
+# PERBAIKAN: Mengubah path dari "/api/memory/upsert" menjadi "/memory/upsert"
 @app.post("/memory/upsert", tags=["Memori"])
 async def memory_upsert_endpoint(payload: MemoryUpsert) -> dict:
     """Menyimpan entri memori ke database."""
@@ -363,6 +375,8 @@ async def memory_upsert_endpoint(payload: MemoryUpsert) -> dict:
     return {"memory": stored}
 
 
+# --- ENDPOINT MEMORY/SEARCH ---
+# PERBAIKAN: Mengubah path dari "/api/memory/search" menjadi "/memory/search"
 @app.post("/memory/search", tags=["Memori"])
 async def memory_search_endpoint(payload: MemorySearch) -> dict:
     """Mencari memori yang relevan dari database."""
@@ -377,6 +391,7 @@ async def memory_search_endpoint(payload: MemorySearch) -> dict:
 
 
 # --- ENDPOINT /EMOTION ---
+# PERBAIKAN: Mengubah path dari "/api/emotion" menjadi "/emotion"
 @app.post("/emotion", response_model=EmotionOut, tags=["Avatar"])
 async def emotion_endpoint(payload: EmotionIn) -> EmotionOut:
     """Kembalikan state emosi JSON untuk sinkron avatar."""
@@ -395,11 +410,11 @@ Klasifikasikan mood dari teks berikut dan keluarkan JSON VALID saja (tanpa catat
 Teks: {payload.text}
 Jika persona pengguna 'tsundere', sebutkan 'tsun' saat nada ketus namun peduli.
 Skema ketat: {{ 
-  "emotion": "neutral|happy|sad|angry|tsun|excited|calm", 
-  "blink": true|false, 
-  "wink": true|false, 
-  "headSwaySpeed": number, # 0.6..1.6 
-  "glow": "#RRGGBB" 
+  "emotion": "neutral|happy|sad|angry|tsun|excited|calm", 
+  "blink": true|false, 
+  "wink": true|false, 
+  "headSwaySpeed": number, # 0.6..1.6 
+  "glow": "#RRGGBB" 
 }}
 Aturan pewarnaan: neutral=#a78bfa, happy=#ff90c2, tsun=#f38bb3, calm=#6ea8ff, excited=#ffd166, sad=#94a3b8, angry=#fb7185.
 Persona aktif: {persona_hint if persona_hint else "tidak disebut"}.

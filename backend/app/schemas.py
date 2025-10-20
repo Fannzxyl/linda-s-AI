@@ -26,6 +26,12 @@ class ChatRequest(BaseModel):
     messages: List[Message] = Field(..., min_items=1)
     persona: Optional[str] = Field(None, max_length=1200)
     use_memory: bool = Field(default=False)
+    
+    # UPGRADE MULTIMODAL: Field untuk data gambar Base64
+    image_base64: Optional[str] = Field(
+        None, 
+        description="Data gambar Base64 (dengan atau tanpa prefix MIME type)."
+    )
 
 
 class MemoryUpsert(BaseModel):

@@ -1,5 +1,9 @@
+// C:\Alfan\linda-s-AI\frontend\src\App.tsx (FINAL FULLCODE)
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import Avatar, { AvatarState, Emotion } from "./components/Avatar"; // Import AvatarState dan Emotion
+// Import React.Dispatch dan React.SetStateAction untuk typing yang benar
+import type { Dispatch, SetStateAction } from "react"; 
+import Avatar, { AvatarState, Emotion } from "./components/Avatar"; 
 import Chat, { Msg } from "./components/Chat";
 
 /* ENDPOINT (samakan dengan proxy vite) */
@@ -66,9 +70,40 @@ export default function App() {
     {
       id: crypto.randomUUID(),
       role: "assistant",
-      content: "Halo! Aku siap bantu. Tulis pesanmu di bawah.",
+      content: "Nihaooooo!! Aku linda siap menjadi teman ngobrol mu.",
     },
   ]);
+
+  // --- STATE BARU UNTUK MULTIMODAL ---
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+
+  // --- FUNGSI BARU: Konversi File ke Base64 ---
+  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+        alert("Hanya file gambar (JPEG, PNG, WEBP) yang didukung.");
+        return;
+    }
+    
+    // Batasan ukuran file (misalnya, 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+        alert("File terlalu besar. Maksimal 5MB.");
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+        // reader.result adalah string Base64 (eg: "data:image/jpeg;base64,...")
+        setImageBase64(reader.result as string);
+        setImagePreviewUrl(URL.createObjectURL(file)); 
+    };
+    reader.readAsDataURL(file); // Memulai konversi ke Base64
+  }
 
   // autoscroll
   const listRef = useRef<HTMLDivElement>(null);
@@ -82,21 +117,31 @@ export default function App() {
   // kirim pesan
   async function onSend() {
     const text = input.trim();
-    if (!text || sending) return;
+    // IZINKAN pengiriman jika ada teks ATAU gambar
+    if ((!text && !imageBase64) || sending) return; 
 
     setInput("");
     setSending(true);
     setTyping(true);
+    
+    // Buat pesan pengguna (teks)
+    const userMsg: Msg = { 
+        id: crypto.randomUUID(), 
+        role: "user", 
+        content: text || "(Gambar terkirim.)", 
+        image_url: imagePreviewUrl // Tambahkan URL pratinjau untuk tampilan di chat bubble
+    };
 
-    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: text };
+    // Tambahkan pesan ke riwayat sebelum mengirim
     setMessages((m) => [...m, userMsg]);
 
     const history = messages
       .filter((x) => x.role !== "system")
       .concat(userMsg)
-      .map(({ role, content }) => ({ role, content }));
+      // Map untuk membuat payload yang bersih, sesuai schema backend
+      .map(({ role, content }) => ({ role, content })); 
 
-    // coba SSE
+    // Coba SSE
     let finalText = "";
     try {
       const res = await fetch(CHAT_URL, {
@@ -105,7 +150,12 @@ export default function App() {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
         },
-        body: JSON.stringify({ messages: history, style: persona, persona }),
+        // PERUBAHAN PENTING: TAMBAH image_base64 di payload
+        body: JSON.stringify({ 
+            messages: history, 
+            persona: persona,
+            image_base64: imageBase64 // Meneruskan Base64
+        }),
       });
 
       if (res.ok && res.body) {
@@ -148,8 +198,12 @@ export default function App() {
           }
         }
 
+        // Setelah streaming selesai:
         setTyping(false);
         setSending(false);
+        setImageBase64(null); 
+        setImagePreviewUrl(null); 
+        if(fileInputRef.current) fileInputRef.current.value = ''; 
 
         if (finalText.trim()) await updateEmotion(finalText.trim(), persona, setAvatar);
         return;
@@ -163,7 +217,8 @@ export default function App() {
       const res = await fetch(CHAT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history, style: persona, persona }),
+        // PERUBAHAN PENTING: Tambahkan image_base64 di payload fallback
+        body: JSON.stringify({ messages: history, persona: persona, image_base64: imageBase64 }), 
       });
       let reply = "Baik. Ada lagi?";
       if (res.ok) {
@@ -189,6 +244,9 @@ export default function App() {
     } finally {
       setTyping(false);
       setSending(false);
+      setImageBase64(null); 
+      setImagePreviewUrl(null); 
+      if(fileInputRef.current) fileInputRef.current.value = '';
     }
   }
 
@@ -199,20 +257,27 @@ export default function App() {
     }
   }
 
+  // --- FUNGSI onClear DIPERBAIKI: Mengatasi Error 422 ---
   async function onClear() {
+    // 1. Reset tampilan pesan lokal segera
     setMessages([
-      { id: crypto.randomUUID(), role: "assistant", content: "Mulai baru." },
-    ]);
+        { id: crypto.randomUUID(), role: "assistant", content: "Halo! Aku siap bantu. Tulis pesanmu di bawah." },
+    ]); 
+
+    // 2. Kirim permintaan reset ke server (backend)
     try {
+      // Endpoint /api/reset harus di-POST
       await fetch(RESET_URL, { method: "POST" });
-    } catch {}
-    try {
-      await fetch(CHAT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reset: true, style: persona, persona }),
-      });
-    } catch {}
+    } catch (e) {
+      console.error("Gagal mereset server:", e);
+    }
+    
+    // 3. Clear semua state multimodal
+    setImageBase64(null); 
+    setImagePreviewUrl(null); 
+    if(fileInputRef.current) fileInputRef.current.value = '';
+
+    // 4. Fokuskan input
     setTimeout(() => {
       document
         .querySelector<HTMLTextAreaElement>("textarea.textarea")
@@ -235,7 +300,6 @@ export default function App() {
           <div className="avatar-card">
             <div className="avatar-glow" />
             <div className="avatar-canvas">
-              {/* PENGGUNAAN KOMPONEN AVATAR BARU */}
               <Avatar state={avatar} typing={typing} />
             </div>
           </div>
@@ -269,7 +333,37 @@ export default function App() {
           <Chat refDiv={listRef} messages={messages} typing={typing} />
 
           <div className="composer">
+            {/* AREA PREVIEW GAMBAR BARU */}
+            {imagePreviewUrl && (
+                <div className="image-preview-container">
+                    <img src={imagePreviewUrl} alt="Preview" className="image-preview" />
+                    <button 
+                        className="clear-image-btn" 
+                        onClick={() => {
+                            setImageBase64(null);
+                            setImagePreviewUrl(null);
+                            if(fileInputRef.current) fileInputRef.current.value = '';
+                        }}
+                    >
+                        &times;
+                    </button>
+                </div>
+            )}
+            
             <div className="input">
+              {/* INPUT FILE BARU */}
+              <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileChange}
+                  style={{ display: 'none' }}
+                  id="file-upload"
+                  ref={fileInputRef}
+              />
+              <label htmlFor="file-upload" className="upload-label">
+                  📸
+              </label>
+              
               <textarea
                 className="textarea"
                 placeholder="Tulis pesanmu…"
@@ -283,7 +377,8 @@ export default function App() {
               />
               <button
                 className="send"
-                disabled={!input.trim() || sending}
+                // Izinkan pengiriman jika ada teks ATAU gambar
+                disabled={(!input.trim() && !imageBase64) || sending} 
                 onClick={onSend}
               >
                 {sending ? "Mengirim…" : "Kirim"}
@@ -303,10 +398,11 @@ export default function App() {
 }
 
 /* panggil /api/emotion */
+// PERBAIKAN TYPING: Menggunakan React.Dispatch<React.SetStateAction<...>> untuk setter function
 async function updateEmotion(
   text: string,
   persona: string,
-  setAvatar: (s: AvatarState) => void
+  setAvatar: Dispatch<SetStateAction<AvatarState>>
 ) {
   try {
     const res = await fetch(EMOTION_URL, {
@@ -316,15 +412,16 @@ async function updateEmotion(
     });
     if (!res.ok) throw new Error(String(res.status));
     const j = await res.json();
-    setAvatar({
-      emotion: (j.emotion as Emotion) ?? "neutral", // Pastikan tipe data sesuai Emotion
+    // Gunakan setAvatar dengan state baru (tidak menggunakan callback)
+    setAvatar({ 
+      emotion: (j.emotion as Emotion) ?? "neutral", 
       blink: j.blink ?? true,
       wink: j.wink ?? false,
       headSwaySpeed: Math.min(1.6, Math.max(0.6, j.headSwaySpeed ?? 1.0)),
       glow: j.glow ?? "#a78bfa",
     });
   } catch {
-    setAvatar((a) => ({ ...a, wink: false, headSwaySpeed: 1.0 }));
+    // Perbaikan typing pada callback
+    setAvatar((a: AvatarState) => ({ ...a, wink: false, headSwaySpeed: 1.0 }));
   }
 }
-
