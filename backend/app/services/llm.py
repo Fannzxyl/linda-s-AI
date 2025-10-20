@@ -2,16 +2,49 @@ import asyncio
 import json
 import logging
 import re
-from typing import AsyncGenerator, Dict, List, Tuple
+import base64
+from io import BytesIO
+from typing import AsyncGenerator, Dict, List, Tuple, Optional, Any
 
 import httpx
+from PIL import Image 
+# Hapus impor google.genai.types karena kita menggunakan dictionary standar
 
-# Pastikan path ini benar, menuju file konfigurasi yang memuat variabel .env
+# Impor dari folder induk (app)
 from ..config import get_settings 
 from ..schemas import Message
 
 logger = logging.getLogger(__name__)
 _CONNECTED_FLAG = False
+
+# ==============================================================================
+# FUNGSI HELPER UTAMA (MULTIMODAL & UTILITY)
+# ==============================================================================
+
+def _build_image_part_dict(image_base64: str) -> Optional[Dict[str, Any]]:
+    """Mengonversi string Base64 menjadi Dict Python untuk payload API (JSON serializable)."""
+    
+    if "," in image_base64:
+        header, encoded = image_base64.split(",", 1)
+        mime_type = header.split(":")[1].split(";")[0]
+    else:
+        encoded = image_base64
+        mime_type = "image/jpeg" # Default fallback
+    
+    try:
+        image_bytes = base64.b64decode(encoded)
+        Image.open(BytesIO(image_bytes)) # Verifikasi gambar
+        
+        return {
+            "inlineData": {
+                "data": encoded,  # Mengirim Base64 string terenkripsi
+                "mimeType": mime_type 
+            }
+        }
+
+    except Exception as e:
+        logger.error("Gagal memproses gambar Base64: %s", e)
+        return None
 
 
 def prepare_system_prompt(
@@ -20,12 +53,10 @@ def prepare_system_prompt(
     memory_snippet: str | None = None,
 ) -> str:
     """Return the final system prompt with optional overrides and memory context."""
-    # Pakai override kalau ada; JANGAN gabung dengan default.
     persona = (persona_override or persona_default).strip()
 
     parts = [persona]
     if memory_snippet:
-        # Menggabungkan memori dengan format yang lebih natural
         parts.append(
             "Catatan konteks dari obrolan sebelumnya: " + memory_snippet.strip() +
             "\nGunakan konteks ini secara natural dalam percakapan, jangan sebutkan sebagai daftar memori."
@@ -33,24 +64,70 @@ def prepare_system_prompt(
     return "\n\n".join(parts)
 
 
+def _build_payload(
+    messages: List[Message], 
+    system_prompt: str,
+    image_base64: Optional[str] = None, 
+) -> Dict:
+    """Map internal message schema to Gemini request payload (Multimodal support)."""
+    
+    image_part = None
+    if image_base64:
+        image_part = _build_image_part_dict(image_base64)
+        
+    contents: List[Dict[str, object]] = []
+    
+    last_user_content_index = -1
+    for i in reversed(range(len(messages))):
+        if messages[i].role == "user":
+            last_user_content_index = i
+            break
+
+    for i, message in enumerate(messages):
+        if message.role == "system": continue
+
+        role = "user" if message.role == "user" else "model"
+        parts: List[Dict[str, str] | Dict[str, Any]] = [{"text": message.content}] 
+
+        if i == last_user_content_index and image_part:
+            parts.insert(0, image_part) 
+            
+        contents.append({"role": role, "parts": parts})
+
+    payload: Dict[str, object] = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": contents,
+        "generationConfig": {
+            "temperature": 0.65,
+            "topP": 0.9,
+            "topK": 32,
+            "maxOutputTokens": 600,
+            "responseMimeType": "text/plain",
+        },
+    }
+        
+    return payload
+
+# ==============================================================================
+# FUNGSI LLM UTAMA
+# ==============================================================================
+
 async def call_gemini_stream(
     messages: List[Message],
     system_prompt: str,
     *,
+    image_base64: Optional[str] = None,
     delay_seconds: float = 0.0,
 ) -> AsyncGenerator[str, None]:
     """Stream response tokens from Gemini API and yield per chunk."""
 
     settings = get_settings()
-    # PENTING: Menggunakan model tunggal dari settings, bukan mencoba varian
     model = settings.gemini_model.strip() 
     
-    # Kumpulan model hanya berisi model yang diset di .env
+    payload = _build_payload(messages, system_prompt, image_base64) 
     candidate_models = [model]
-    payload = _build_payload(messages, system_prompt)
     last_error: Exception | None = None
 
-    # Iterasi HANYA sekali (model tunggal dari .env)
     for idx, current_model in enumerate(candidate_models): 
         url = f"{settings.gemini_base_url}/{current_model}:streamGenerateContent"
         params = {"key": settings.gemini_api_key, "alt": "sse"}
@@ -60,19 +137,18 @@ async def call_gemini_stream(
         
         while True:
             try:
-                # Cek krusial: Jika API key kosong, segera raise error yang jelas
                 if not settings.gemini_api_key:
                      raise ValueError("GEMINI_API_KEY tidak ditemukan atau kosong di .env.")
 
                 async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
                     async with client.stream("POST", url, params=params, json=payload) as response:
                         
-                        # Di sini kita TIDAK perlu logika fallback 404, cukup langsung raise
                         response.raise_for_status() 
                         
                         aggregated_raw = ""
                         first_chunk = True
-                        async for payload_json in _read_sse_payloads(response):
+                        # PANGGILAN SUKSES KE FUNGSI HELPER DI BAWAH
+                        async for payload_json in _read_sse_payloads(response): 
                             if payload_json == "[DONE]":
                                 break
                             chunks = _extract_text(payload_json)
@@ -96,18 +172,14 @@ async def call_gemini_stream(
                                     yield cleaned
                         
                         _log_connected(current_model)
-                        return # Sukses, keluar dari fungsi
+                        return 
 
             except httpx.HTTPStatusError as exc:
-                # Sekarang, semua HTTP error (termasuk 404) akan di-retry
-                # karena kita hanya punya satu model. Jika 404, artinya 
-                # model di .env SALAH, dan kita harus retry sampai max_retries
                 attempt += 1
                 last_error = exc
                 _log_http_error(exc)
             
             except (httpx.HTTPError, httpx.ReadTimeout, ValueError) as exc:
-                # Tambahkan ValueError untuk menangani API key kosong
                 attempt += 1
                 last_error = exc
                 logger.warning("Gemini request error: %s", exc)
@@ -118,7 +190,6 @@ async def call_gemini_stream(
             sleep_for = backoff**attempt
             await asyncio.sleep(sleep_for)
 
-    # Hanya mencapai sini jika semua percobaan (atau model) gagal
     status = None
     if isinstance(last_error, httpx.HTTPStatusError) and last_error.response:
         status = last_error.response.status_code
@@ -130,40 +201,11 @@ async def call_gemini_stream(
     )
     raise RuntimeError(message) from last_error
 
+# ==============================================================================
+# FUNGSI HELPER STREAMING (DIPINDAHKAN AGAR TIDAK ADA NAMEERROR)
+# ==============================================================================
 
-def _build_payload(messages: List[Message], system_prompt: str) -> Dict:
-    """Map internal message schema to Gemini request payload."""
-    contents: List[Dict[str, object]] = []
-    for message in messages:
-        if message.role == "system": continue
-        role = "user" if message.role == "user" else "model"
-        contents.append({"role": role, "parts": [{"text": message.content}]})
-
-    payload: Dict[str, object] = {
-        "system_instruction": system_prompt, # NOTE: system_instruction di Gemini 2.5+ bisa berupa string langsung
-        "contents": contents,
-        "generationConfig": {
-            "temperature": 0.65,
-            "topP": 0.9,
-            "topK": 32,
-            "maxOutputTokens": 600,
-            "responseMimeType": "text/plain",
-        },
-    }
-    
-    # System instruction sebagai string atau object. Mengingat payload sebelumnya
-    # menggunakan format parts, kita kembalikan ke format yang lebih aman:
-    if isinstance(payload['system_instruction'], str):
-        payload['system_instruction'] = {"parts": [{"text": payload['system_instruction']}]}
-        
-    return payload
-
-# Hapus fungsi _model_variants karena tidak diperlukan lagi.
-
-# Definisikan ulang fungsi-fungsi helper yang ada di file Anda
-# Karena Anda tidak menyertakan implementasi penuhnya:
 async def _read_sse_payloads(response: httpx.Response) -> AsyncGenerator[str, None]:
-    # ... (Implementasi Anda untuk _read_sse_payloads) ...
     buffer = []
     async for raw_line in response.aiter_lines():
         if raw_line.startswith(":"): continue
@@ -184,7 +226,6 @@ async def _read_sse_payloads(response: httpx.Response) -> AsyncGenerator[str, No
 
 
 def _compute_delta(chunk: str, prior: str) -> Tuple[str, str]:
-    # ... (Implementasi Anda untuk _compute_delta) ...
     if not prior: return chunk, chunk
     if chunk.startswith(prior):
         delta = chunk[len(prior) :]
@@ -194,7 +235,6 @@ def _compute_delta(chunk: str, prior: str) -> Tuple[str, str]:
 
 
 def _sanitize_delta(text: str) -> str:
-    # ... (Implementasi Anda untuk _sanitize_delta) ...
     cleaned = text.replace("\r", "")
     for symbol in ["**", "__", "_", "`", "~~"]: cleaned = cleaned.replace(symbol, "")
     cleaned = re.sub(r"^#{1,6}\s*", "", cleaned, flags=re.MULTILINE)
@@ -205,13 +245,11 @@ def _sanitize_delta(text: str) -> str:
 
 
 def _log_http_error(exc: httpx.HTTPStatusError) -> None:
-    # ... (Implementasi Anda untuk _log_http_error) ...
     safe_url = exc.request.url.copy_with(query=None) if exc.request else "unknown_url"
     logger.warning("Gemini request failed: %s -> %s", safe_url, exc.response.status_code if exc.response else "no-response")
 
 
 def _log_connected(model: str) -> None:
-    # ... (Implementasi Anda untuk _log_connected) ...
     global _CONNECTED_FLAG
     if not _CONNECTED_FLAG:
         logger.info("Gemini connected via model %s [ok]", model)
@@ -219,7 +257,6 @@ def _log_connected(model: str) -> None:
 
 
 def _extract_text(line: str) -> List[str]:
-    # ... (Implementasi Anda untuk _extract_text) ...
     try: data = json.loads(line)
     except json.JSONDecodeError: return []
     chunks: List[str] = []
@@ -231,8 +268,7 @@ def _extract_text(line: str) -> List[str]:
             if text: chunks.append(text)
     return chunks
 
-# Anda perlu memastikan fungsi-fungsi helper lainnya (seperti summarize_for_memory)
-# tetap ada dan berfungsi di file ini.
+
 def summarize_for_memory(user_text: str) -> Tuple[str, str]:
     normalized = " ".join(user_text.split())
     lower_text = normalized.lower()
