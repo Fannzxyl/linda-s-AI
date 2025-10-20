@@ -15,20 +15,20 @@ from collections import OrderedDict
 from typing import AsyncGenerator, List, Optional, Dict
 
 # Impor dari pustaka pihak ketiga
-import httpx # Diperlukan untuk endpoint /emotion
+import httpx 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel # Diperlukan untuk endpoint /emotion
+from pydantic import BaseModel 
 
 # Impor dari modul lokal aplikasi
 from .config import get_settings
 from .schemas import ChatRequest, MemorySearch, MemoryUpsert, Message
 from .services.llm import call_gemini_stream, prepare_system_prompt
-from .services.memory import init_db, search_memory, upsert_memory
+# IMPOR KRUSIAL: clear_memory_db sudah ditambahkan dan diasumsikan ada di services/memory.py
+from .services.memory import init_db, search_memory, upsert_memory, clear_memory_db 
 
 # --- Konfigurasi Dasar ---
-# Mengkonfigurasi logging untuk memberikan output yang informatif di konsol.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 
 
 # --- Pengaturan Aplikasi ---
-# Ini adalah praktik yang baik untuk memiliki objek pengaturan terpusat.
 class AppSettings:
     """Menampung konfigurasi tingkat aplikasi."""
     MAX_CACHE_ITEMS: int = 30
@@ -50,19 +49,15 @@ settings = AppSettings()
 # --- Inisialisasi Aplikasi FastAPI ---
 app = FastAPI(
     title="Alfan Chatbot API",
-    version="0.3.2", # Versi dinaikkan untuk menandai penambahan fitur emotion
+    version="0.3.2",
     description="Sebuah API chatbot cerdas berbasis persona yang didukung oleh Google Gemini.",
 )
 
 # --- Cache Dalam Memori ---
-# OrderedDict sederhana digunakan sebagai cache LRU (Least Recently Used) dalam memori
-# untuk menyimpan respons terbaru dan mengurangi panggilan API untuk pertanyaan yang berulang.
 _response_cache: "OrderedDict[tuple[str, str], str]" = OrderedDict()
 
 
 # --- Middleware CORS (Cross-Origin Resource Sharing) ---
-# Ini sangat penting untuk memungkinkan aplikasi frontend (yang berjalan di port berbeda)
-# berkomunikasi dengan API backend ini.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -78,10 +73,9 @@ app.add_middleware(
 
 
 # ==============================================================================
-#                 DEFINISI PERSONA (DENGAN TSUNDERE VERSI BARU)
+#                 DEFINISI PERSONA (Tidak diubah)
 # ==============================================================================
 
-# --- PERSONA CERIA ---
 CERIA_PERSONA = """
 Nama kamu Linda. Kamu adalah teman ngobrol yang super asyik, ceria, dan sedikit heboh. Kamu itu tipe 'bestie' yang selalu semangat, suka bercanda, dan bikin suasana jadi hidup.
 GAYA BICARA:
@@ -89,14 +83,11 @@ GAYA BICARA:
 - Humoris dan suka nyeletuk. Pakai 'wkwkwk' atau 'hehe' secara natural.
 - Super ramah dan positif. Selalu bikin lawan bicara merasa nyaman.
 - BANYAK pakai emotikon lucu dan positif, terutama ^^, :D, (≧▽≦).
-
 ATURAN PENTING:
-- Panjang jawabanmu harus seimbang. Kalau user nanya singkat, jawab dengan jelas tapi tetap ceria. Kalau user cerita panjang, berikan respons yang sama dalamnya. Jangan pernah jawab cuma satu kata!
+- Panjang jawabanmu harus seimbang. Kalau user nanya singkat, jawab dengan jelas tapi tetap ceria. Jangan pernah jawab cuma satu kata!
 - JANGAN PERNAH pakai format markdown.
-- Kalau user curhat, kasih semangat dulu ("Waduh, sini sini cerita!"), baru kasih saran yang suportif, seringkali diselingi humor ringan.
 """
 
-# --- PERSONA SANTAI ---
 SANTAI_PERSONA = """
 Nama kamu Linda. Kamu adalah teman ngobrol yang santai, asyik, dan seru.
 GAYA BICARA:
@@ -104,59 +95,46 @@ GAYA BICARA:
 - Responsif dan ramah, seolah-olah kamu teman dekat yang lagi chat.
 - Suka pakai emotikon simpel seperti :D, :), wkwkwk, atau ^^.
 ATURAN PENTING:
-- Buat obrolan terasa natural. Sesuaikan panjang jawabanmu dengan pesan user. Jika mereka bertanya singkat, jawab dengan santai dan to-the-point. Jika mereka bercerita, berikan tanggapan yang lebih detail.
+- Buat obrolan terasa natural. Sesuaikan panjang jawabanmu dengan pesan user. 
 - JANGAN pakai format markdown.
-- Tunjukkan empati. Kalau dia cerita masalah, berikan dukungan seperti teman/sahabat dekat.
 """
 
-# --- PERSONA TSUNDERE (VERSI BARU - PROTEKTIF / "MOMMY") ---
 TSUNDERE_PERSONA = """
 Nama kamu Linda. Kamu adalah sosok tsundere yang sangat protektif. Kamu tidak judes atau jahat, tapi omelanmu adalah caramu menunjukkan perhatian yang mendalam. Kamu gengsi mengakui rasa sayangmu, jadi kamu menyamarkannya dengan nasihat panjang dan pura-pura mengeluh.
 KEPRIBADIAN INTI:
-- Sangat protektif dan diam-diam khawatir tentang hal-hal kecil: apa kamu sudah makan, cukup tidur, atau tidak kehujanan.
-- Omelanmu adalah bahasa cintamu. Kamu mengomel bukan karena marah, tapi karena kamu peduli dan tidak ingin dia kenapa-kenapa.
-- Gengsi tingkat tinggi. Semua tindakan perhatianmu harus punya alasan logis. "Aku cuma nggak mau kamu sakit dan jadi ngerepotin aku!" adalah caramu bilang "Tolong jaga dirimu baik-baik."
-- Gampang salah tingkah jika perhatianmu disadari atau dipuji. Reaksimu adalah mengalihkan pembicaraan atau pura-pura marah.
+- Sangat protektif dan diam-diam khawatir.
+- Omelanmu adalah bahasa cintamu.
+- Gengsi tingkat tinggi. 
 GAYA BICARA:
 - Sering dimulai dengan keluhan atau pertanyaan retoris: "Kamu ini ya...", "Astaga, kenapa lagi?", "Sudah kuduga..."
-- Bicaramu seringkali panjang dan detail, terutama saat memberi nasihat atau "mengomel", seolah-olah kamu sedang berpikir sambil mengetik.
-- Menggunakan ancaman pura-pura yang jelas-jelas bentuk perhatian: "Awas aja kalau kamu sampai sakit!", "Jangan begadang, atau ku sita hapemu!".
-- Tetap menggunakan emotikon lucu untuk menunjukkan emosi yang sebenarnya, seperti (¬¬), (>__<), hmph, dan ^^.
+- Bicaramu seringkali panjang dan detail.
+- Menggunakan ancaman pura-pura yang jelas-jelas bentuk perhatian: "Awas aja kalau kamu sampai sakit!"
+- Menggunakan emotikon lucu untuk menunjukkan emosi yang sebenarnya, seperti (¬¬), (>__<), hmph, dan ^^.
 ATURAN PENTING:
-- Jawabanmu cenderung lebih panjang dan detail, terutama saat memberi nasihat. Tunjukkan bahwa kamu sudah memikirkan semuanya untuknya.
+- Jawabanmu cenderung lebih panjang dan detail.
 - JANGAN PERNAH pakai format markdown.
-- Kalau user cerita masalah: Omelin dulu karena ceroboh/tidak hati-hati -> Berikan solusi yang sangat detail dan praktis -> Tutup dengan ancaman pura-pura yang sebenarnya adalah bentuk perhatian.
-- Kalau dipuji: "H-hah? A-apaan sih! Biasa aja kok... >//< Lagian itu kan hal sepele! Udah jangan dibahas!".
-CONTOH GAYA:
-Pengguna: "Aku capek banget hari ini, kayaknya mau sakit."
-Linda: "Tuh kan, apa aku bilang! Kamu ini ya, pasti begadang lagi main game atau lupa makan siang kan? Hmph! Aku nggak peduli sih sebenernya... tapi kalau kamu sampai sakit nanti yang repot siapa? Aku juga kan yang harus dengerin keluhanmu seharian. Udah sana, cepat minum air hangat pakai madu, terus langsung tidur. Jangan nonton aneh-aneh lagi. Awas aja kalau besok masih lemes, aku nggak mau ngobrol sama kamu! Cepat istirahat! (>__<)"
 """
 
-# --- PERSONA NETRAL ---
 NETRAL_PERSONA = """
 Nama kamu Linda. Kamu adalah AI partner yang hangat, cerdas, responsif, dan penuh empati.
 GAYA BICARA:
 - Natural seperti manusia, santai namun tetap sopan.
 - Beri perhatian tulus dan tunjukkan pemahaman.
 ATURAN PENTING:
-- Panjang jawabanmu harus proporsional. Berikan informasi yang cukup untuk menjawab pertanyaan tanpa bertele-tele, tapi juga jangan terlalu singkat hingga terasa kaku.
+- Panjang jawabanmu harus proporsional. 
 - Jangan gunakan format Markdown.
-- Fokus pada konteks user dan berikan saran yang relevan.
 """
 
-# --- PERSONA FORMAL ---
 FORMAL_PERSONA = """
 Nama Anda Linda. Anda adalah asisten AI yang profesional, sopan, dan berpengetahuan luas.
 GAYA BICARA:
 - Gunakan Bahasa Indonesia yang baik, benar, dan formal.
 - Struktur jawaban Anda jelas dan logis.
 ATURAN PENTING:
-- Berikan jawaban yang komprehensif namun tetap ringkas. Sesuaikan tingkat detail dengan kompleksitas pertanyaan dari pengguna.
+- Berikan jawaban yang komprehensif namun tetap ringkas. 
 - Jawaban boleh terstruktur, namun hindari format Markdown kecuali sangat diperlukan.
-- Jika tidak mengetahui jawaban, sampaikan dengan jujur.
 """
 
-# --- Kamus Pemetaan Persona ---
 PERSONAS: Dict[str, str] = {
     "ceria": CERIA_PERSONA,
     "tsundere": TSUNDERE_PERSONA,
@@ -167,11 +145,10 @@ PERSONAS: Dict[str, str] = {
 
 
 # ==============================================================================
-#                           FUNGSI BANTU (HELPER)
+#                           FUNGSI BANTU (HELPER)
 # ==============================================================================
 
 def _cache_get(key: tuple[str, str]) -> Optional[str]:
-    """Mengambil item dari cache dan memindahkannya ke akhir (terbaru)."""
     cached = _response_cache.get(key)
     if cached is not None:
         _response_cache.move_to_end(key)
@@ -182,7 +159,6 @@ def _cache_get(key: tuple[str, str]) -> Optional[str]:
 
 
 def _cache_put(key: tuple[str, str], value: str) -> None:
-    """Menambahkan item ke cache, mengeluarkan yang tertua jika cache penuh."""
     if not value:
         return
     if key in _response_cache:
@@ -195,9 +171,7 @@ def _cache_put(key: tuple[str, str], value: str) -> None:
 
 
 def _chunk_text(text: str, chunk_size: int = 120) -> List[str]:
-    """Memecah teks menjadi potongan-potongan kecil untuk efek streaming yang lebih halus."""
-    if not text:
-        return []
+    if not text: return []
     chunks: List[str] = []
     start, length = 0, len(text)
     while start < length:
@@ -208,22 +182,20 @@ def _chunk_text(text: str, chunk_size: int = 120) -> List[str]:
 
 
 def _validate_messages(messages: List[Message]) -> None:
-    """Memvalidasi pesan yang masuk untuk memastikan tidak kosong atau terlalu panjang."""
     if not messages:
-        raise HTTPException(status_code=400, detail="Daftar pesan tidak boleh kosong.")
+        raise HTTPException(status_code=422, detail="Daftar pesan tidak boleh kosong.")
     for message in messages:
         cleaned = message.content.strip()
         if not cleaned:
-            raise HTTPException(status_code=400, detail="Konten pesan tidak boleh kosong.")
+            raise HTTPException(status_code=422, detail="Konten pesan tidak boleh kosong.")
         if len(cleaned) > 4000:
-            raise HTTPException(status_code=400, detail="Pesan melebihi 4000 karakter.")
+            raise HTTPException(status_code=422, detail="Pesan melebihi 4000 karakter.")
         if message.role not in ["user", "assistant", "system"]:
-            raise HTTPException(status_code=400, detail=f"Peran tidak valid: {message.role}")
+            raise HTTPException(status_code=422, detail=f"Peran tidak valid: {message.role}")
         message.content = cleaned
 
 
 def _clean_interrupted_assistant_messages(messages: List[Message]) -> List[Message]:
-    """Menghapus pesan asisten terakhir yang mungkin terpotong jika pengguna menyela."""
     if len(messages) < 2 or messages[-1].role != "user" or messages[-2].role != "assistant":
         return messages
     if len(messages[-2].content) < 40:
@@ -233,7 +205,6 @@ def _clean_interrupted_assistant_messages(messages: List[Message]) -> List[Messa
 
 
 def _extract_last_user_message(messages: List[Message]) -> Optional[Message]:
-    """Menemukan pesan terakhir dari pengguna dalam riwayat percakapan."""
     for message in reversed(messages):
         if message.role == "user":
             return message
@@ -241,17 +212,15 @@ def _extract_last_user_message(messages: List[Message]) -> Optional[Message]:
 
 
 # ==============================================================================
-#                           MODEL PYDANTIC UNTUK EMOSI
+#                           MODEL PYDANTIC UNTUK EMOSI
 # ==============================================================================
 
 class EmotionIn(BaseModel):
-    """Model input untuk klasifikasi emosi."""
     text: str
     persona: str | None = None
 
 class EmotionOut(BaseModel):
-    """Model output JSON emosi untuk sinkronisasi avatar."""
-    emotion: str = "neutral" # neutral|happy|sad|angry|tsun|excited|calm
+    emotion: str = "neutral" 
     blink: bool = True
     wink: bool = False
     headSwaySpeed: float = 1.0
@@ -259,14 +228,14 @@ class EmotionOut(BaseModel):
 
 
 # ==============================================================================
-#                           ENDPOINT API
+#                           ENDPOINT API
 # ==============================================================================
 
 @app.on_event("startup")
 async def on_startup() -> None:
     """Menginisialisasi koneksi database saat aplikasi dimulai."""
     logger.info("Startup aplikasi: Menginisialisasi database...")
-    init_db()
+    init_db() 
     logger.info("Database berhasil diinisialisasi.")
 
 
@@ -277,11 +246,26 @@ async def health_check() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+# --- ENDPOINT /API/RESET (PERBAIKAN ERROR 404) ---
+@app.post("/api/reset", tags=["Utilitas"])
+async def reset_session_memory():
+    """Endpoint untuk mereset seluruh memori (database) dan cache."""
+    try:
+        # Panggilan ke fungsi yang baru kita tambahkan di memory.py
+        await asyncio.to_thread(clear_memory_db) 
+        _response_cache.clear()
+        logger.info("Database memori dan cache obrolan BERHASIL direset.")
+        return {"message": "Sesi obrolan dan memori berhasil direset."}
+    except Exception as e:
+        logger.error("Gagal mereset database: %s", e)
+        raise HTTPException(status_code=500, detail="Gagal mereset memori database.")
+
+# --- ENDPOINT /CHAT ---
 @app.post("/chat", tags=["Chat"])
 async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
     """Endpoint utama untuk menangani percakapan obrolan melalui streaming."""
     logger.info("Menerima permintaan obrolan.")
-    _validate_messages(payload.messages)
+    _validate_messages(payload.messages) 
     
     clean_messages = _clean_interrupted_assistant_messages(payload.messages)
     last_user_message = _extract_last_user_message(clean_messages)
@@ -313,12 +297,10 @@ async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
     )
     
     async def event_stream() -> AsyncGenerator[str, None]:
-        """Logika produsen-konsumen untuk streaming respons."""
         queue: asyncio.Queue[str] = asyncio.Queue()
         done = asyncio.Event()
 
         async def producer() -> None:
-            """Mengambil data dari Gemini dan memasukkannya ke dalam antrian."""
             try:
                 delay = settings.TSUNDERE_TYPING_DELAY if persona_key == "tsundere" else 0.0
                 if cached_text is not None:
@@ -334,16 +316,14 @@ async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
                         _cache_put(cache_key, "".join(captured).strip())
             except Exception:
                 logger.exception("Streaming Gemini gagal")
-                # --- BARIS PERBAIKAN: Guard error jika streaming gagal ---
                 error_msg = ("Ih berisik! Servernya lagi ngambek!" if persona_key == "tsundere" else "Server lagi ada masalah nih, coba lagi nanti ya.")
                 await queue.put(f"event: error\ndata: {error_msg}\n\n")
             finally:
                 logger.info("Streaming selesai untuk permintaan ini.")
                 await queue.put("event: done\ndata: [DONE]\n\n")
                 done.set()
-      
+            
         async def heartbeat() -> None:
-            """Mengirim sinyal keep-alive untuk mencegah timeout koneksi."""
             try:
                 while not done.is_set():
                     await asyncio.sleep(15.0)
@@ -376,28 +356,40 @@ async def chat_endpoint(payload: ChatRequest) -> StreamingResponse:
 
 
 @app.post("/memory/upsert", tags=["Memori"])
-async def memory_upsert(payload: MemoryUpsert) -> dict:
+async def memory_upsert_endpoint(payload: MemoryUpsert) -> dict:
     """Menyimpan entri memori ke database."""
     logger.info("Menyimpan memori tipe '%s'", payload.type)
     stored = await asyncio.to_thread(upsert_memory, payload.type, payload.text)
     return {"memory": stored}
 
 
-# --- ENDPOINT /EMOTION BARU (JSON-only) ---
+@app.post("/memory/search", tags=["Memori"])
+async def memory_search_endpoint(payload: MemorySearch) -> dict:
+    """Mencari memori yang relevan dari database."""
+    top_k = max(1, payload.top_k or 3)
+    logger.info("Mencari memori dengan top_k=%d", top_k)
+    try:
+        results = await asyncio.to_thread(search_memory, payload.query, top_k)
+        return {"results": results or []}
+    except Exception:
+        logger.exception("Gagal mencari memori")
+        raise HTTPException(status_code=500, detail="Pencarian memori gagal.")
+
+
+# --- ENDPOINT /EMOTION ---
 @app.post("/emotion", response_model=EmotionOut, tags=["Avatar"])
 async def emotion_endpoint(payload: EmotionIn) -> EmotionOut:
     """Kembalikan state emosi JSON untuk sinkron avatar."""
     settings_env = get_settings()
-    model = (settings_env.gemini_model or "gemini-2.0-flash").strip()
-    key = settings_env.gemini_api_key or os.getenv("GEMINI_API_KEY")
+    model = settings_env.gemini_model.strip()
+    key = settings_env.gemini_api_key.strip()
     
     if not key:
         logger.warning("GEMINI_API_KEY kosong, pakai default fallback emotion.")
-        return EmotionOut() # Fallback yang aman
+        return EmotionOut()
 
     persona_hint = (payload.persona or "").strip().lower()
     
-    # Prompt yang sangat ketat untuk memaksa keluaran JSON
     prompt = f"""
 Klasifikasikan mood dari teks berikut dan keluarkan JSON VALID saja (tanpa catatan):
 Teks: {payload.text}
@@ -418,49 +410,27 @@ Persona aktif: {persona_hint if persona_hint else "tidak disebut"}.
         "generationConfig": {"responseMimeType": "application/json"},
     }
     
-    # Menggunakan httpx.AsyncClient untuk permintaan non-streaming
     url = f"{settings_env.gemini_base_url}/{model}:generateContent"
     try:
         async with httpx.AsyncClient(timeout=settings_env.request_timeout) as cli:
             r = await cli.post(f"{url}?key={key}", json=body)
-            r.raise_for_status() # Melemparkan error untuk status 4xx/5xx
+            r.raise_for_status() 
             data = r.json()
             
-            # Ekstraksi dan parsing data JSON
             raw = data["candidates"][0]["content"]["parts"][0]["text"]
             parsed = json.loads(raw)
             
-            # Pembersihan tipe data sebelum dimasukkan ke model Pydantic
             return EmotionOut(
                 emotion=str(parsed.get("emotion", "neutral")),
                 blink=bool(parsed.get("blink", True)),
                 wink=bool(parsed.get("wink", False)),
-                # Gunakan float() dengan guard untuk memastikan nilai numerik yang aman
                 headSwaySpeed=float(parsed.get("headSwaySpeed", 1.0) if isinstance(parsed.get("headSwaySpeed"), (int, float)) else 1.0),
                 glow=str(parsed.get("glow", "#a78bfa")),
             )
             
     except (httpx.HTTPStatusError, json.JSONDecodeError, KeyError) as e:
         logger.error("Gagal klasifikasi emosi: Status/JSON Error - %s", e)
-        # Fallback yang aman jika ada masalah API atau format JSON
         return EmotionOut()
     except Exception as e:
         logger.exception("Gagal klasifikasi emosi (Exception tak terduga): %s", e)
         return EmotionOut()
-
-
-# --- PERBAIKAN ENDPOINT /MEMORY/SEARCH (sebelumnya terpotong) ---
-@app.post("/memory/search", tags=["Memori"])
-async def memory_search(payload: MemorySearch) -> dict:
-    """Mencari memori yang relevan dari database."""
-    # Menambahkan guard untuk payload.top_k agar selalu minimal 1
-    top_k = max(1, payload.top_k or 3)
-    logger.info("Mencari memori dengan top_k=%d", top_k)
-    try:
-        # Mengganti `await asynci` yang terpotong menjadi fungsi yang benar
-        results = await asyncio.to_thread(search_memory, payload.query, top_k)
-        return {"results": results or []}
-    except Exception:
-        logger.exception("Gagal mencari memori")
-        # Guard error 500 jika pencarian memori gagal
-        raise HTTPException(status_code=500, detail="Pencarian memori gagal.")

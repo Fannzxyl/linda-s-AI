@@ -6,16 +6,14 @@ from typing import AsyncGenerator, Dict, List, Tuple
 
 import httpx
 
-from ..config import get_settings
+# Pastikan path ini benar, menuju file konfigurasi yang memuat variabel .env
+from ..config import get_settings 
 from ..schemas import Message
 
 logger = logging.getLogger(__name__)
 _CONNECTED_FLAG = False
 
 
-# ### PERBAIKAN KRUSIAL: FUNGSI INI DIGANTI TOTAL ###
-# Logika baru ini memastikan hanya SATU persona yang aktif: override, atau default jika override tidak ada.
-# Persona tidak lagi digabungkan, sehingga menyelesaikan masalah utama.
 def prepare_system_prompt(
     persona_default: str,
     persona_override: str | None = None,
@@ -44,26 +42,34 @@ async def call_gemini_stream(
     """Stream response tokens from Gemini API and yield per chunk."""
 
     settings = get_settings()
+    # PENTING: Menggunakan model tunggal dari settings, bukan mencoba varian
+    model = settings.gemini_model.strip() 
+    
+    # Kumpulan model hanya berisi model yang diset di .env
+    candidate_models = [model]
     payload = _build_payload(messages, system_prompt)
-    candidate_models = _model_variants(settings.gemini_model.strip())
-
     last_error: Exception | None = None
 
-    for idx, model in enumerate(candidate_models):
-        url = f"{settings.gemini_base_url}/{model}:streamGenerateContent"
+    # Iterasi HANYA sekali (model tunggal dari .env)
+    for idx, current_model in enumerate(candidate_models): 
+        url = f"{settings.gemini_base_url}/{current_model}:streamGenerateContent"
         params = {"key": settings.gemini_api_key, "alt": "sse"}
 
         attempt = 0
         backoff = settings.backoff_factor
+        
         while True:
             try:
+                # Cek krusial: Jika API key kosong, segera raise error yang jelas
+                if not settings.gemini_api_key:
+                     raise ValueError("GEMINI_API_KEY tidak ditemukan atau kosong di .env.")
+
                 async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
                     async with client.stream("POST", url, params=params, json=payload) as response:
-                        if response.status_code == 404 and idx < len(candidate_models) - 1:
-                            last_error = httpx.HTTPStatusError("Model variant not found", request=response.request, response=response)
-                            _log_http_error(last_error)
-                            break
-                        response.raise_for_status()
+                        
+                        # Di sini kita TIDAK perlu logika fallback 404, cukup langsung raise
+                        response.raise_for_status() 
+                        
                         aggregated_raw = ""
                         first_chunk = True
                         async for payload_json in _read_sse_payloads(response):
@@ -71,65 +77,70 @@ async def call_gemini_stream(
                                 break
                             chunks = _extract_text(payload_json)
                             for token in chunks:
-                                if not token:
-                                    continue
+                                if not token: continue
                                 delta_raw, aggregated_raw = _compute_delta(token, aggregated_raw)
-                                if not delta_raw:
-                                    continue
+                                if not delta_raw: continue
+                                
                                 cleaned = _sanitize_delta(delta_raw)
-                                if not cleaned:
-                                    continue
+                                if not cleaned: continue
+                                
                                 if first_chunk and delay_seconds > 0:
                                     await asyncio.sleep(delay_seconds)
                                     delay_seconds = 0.0
+                                
                                 if first_chunk:
                                     cleaned = cleaned.lstrip()
                                     first_chunk = False
+                                    
                                 if cleaned:
                                     yield cleaned
-                        _log_connected(model)
-                return
+                        
+                        _log_connected(current_model)
+                        return # Sukses, keluar dari fungsi
+
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 404 and idx < len(candidate_models) - 1:
-                    last_error = exc
-                    _log_http_error(exc)
-                    break
+                # Sekarang, semua HTTP error (termasuk 404) akan di-retry
+                # karena kita hanya punya satu model. Jika 404, artinya 
+                # model di .env SALAH, dan kita harus retry sampai max_retries
                 attempt += 1
                 last_error = exc
                 _log_http_error(exc)
-            except (httpx.HTTPError, httpx.ReadTimeout) as exc:
+            
+            except (httpx.HTTPError, httpx.ReadTimeout, ValueError) as exc:
+                # Tambahkan ValueError untuk menangani API key kosong
                 attempt += 1
                 last_error = exc
                 logger.warning("Gemini request error: %s", exc)
 
             if attempt > settings.max_retries:
                 break
+            
             sleep_for = backoff**attempt
             await asyncio.sleep(sleep_for)
 
+    # Hanya mencapai sini jika semua percobaan (atau model) gagal
     status = None
     if isinstance(last_error, httpx.HTTPStatusError) and last_error.response:
         status = last_error.response.status_code
+        
     message = (
-        f"Gemini API failed after trying variants {candidate_models}. "
-        f"Last status: {status if status is not None else 'unavailable'}"
+        f"Gemini API failed after trying model '{model}' ({settings.max_retries + 1} attempts). "
+        f"Last status: {status if status is not None else 'unavailable'}. "
+        "CEK: 1. Nama model di .env (harus 'gemini-2.5-flash'). 2. Kunci API Anda."
     )
     raise RuntimeError(message) from last_error
 
 
 def _build_payload(messages: List[Message], system_prompt: str) -> Dict:
     """Map internal message schema to Gemini request payload."""
-    # Gemini modern models prefer system instruction as a top-level field.
     contents: List[Dict[str, object]] = []
     for message in messages:
-        # Skip legacy system message, it's handled by system_prompt
-        if message.role == "system":
-            continue
+        if message.role == "system": continue
         role = "user" if message.role == "user" else "model"
         contents.append({"role": role, "parts": [{"text": message.content}]})
 
     payload: Dict[str, object] = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "system_instruction": system_prompt, # NOTE: system_instruction di Gemini 2.5+ bisa berupa string langsung
         "contents": contents,
         "generationConfig": {
             "temperature": 0.65,
@@ -139,10 +150,20 @@ def _build_payload(messages: List[Message], system_prompt: str) -> Dict:
             "responseMimeType": "text/plain",
         },
     }
+    
+    # System instruction sebagai string atau object. Mengingat payload sebelumnya
+    # menggunakan format parts, kita kembalikan ke format yang lebih aman:
+    if isinstance(payload['system_instruction'], str):
+        payload['system_instruction'] = {"parts": [{"text": payload['system_instruction']}]}
+        
     return payload
 
+# Hapus fungsi _model_variants karena tidak diperlukan lagi.
 
+# Definisikan ulang fungsi-fungsi helper yang ada di file Anda
+# Karena Anda tidak menyertakan implementasi penuhnya:
 async def _read_sse_payloads(response: httpx.Response) -> AsyncGenerator[str, None]:
+    # ... (Implementasi Anda untuk _read_sse_payloads) ...
     buffer = []
     async for raw_line in response.aiter_lines():
         if raw_line.startswith(":"): continue
@@ -162,17 +183,8 @@ async def _read_sse_payloads(response: httpx.Response) -> AsyncGenerator[str, No
         if payload: yield payload
 
 
-def _model_variants(model: str) -> List[str]:
-    variants = []
-    base = model or "gemini-1.5-flash"
-    def add_variant(value: str):
-        if value not in variants: variants.append(value)
-    add_variant(base)
-    if not base.endswith("-latest"): add_variant(f"{base}-latest")
-    return variants
-
-
 def _compute_delta(chunk: str, prior: str) -> Tuple[str, str]:
+    # ... (Implementasi Anda untuk _compute_delta) ...
     if not prior: return chunk, chunk
     if chunk.startswith(prior):
         delta = chunk[len(prior) :]
@@ -182,6 +194,7 @@ def _compute_delta(chunk: str, prior: str) -> Tuple[str, str]:
 
 
 def _sanitize_delta(text: str) -> str:
+    # ... (Implementasi Anda untuk _sanitize_delta) ...
     cleaned = text.replace("\r", "")
     for symbol in ["**", "__", "_", "`", "~~"]: cleaned = cleaned.replace(symbol, "")
     cleaned = re.sub(r"^#{1,6}\s*", "", cleaned, flags=re.MULTILINE)
@@ -192,11 +205,13 @@ def _sanitize_delta(text: str) -> str:
 
 
 def _log_http_error(exc: httpx.HTTPStatusError) -> None:
+    # ... (Implementasi Anda untuk _log_http_error) ...
     safe_url = exc.request.url.copy_with(query=None) if exc.request else "unknown_url"
     logger.warning("Gemini request failed: %s -> %s", safe_url, exc.response.status_code if exc.response else "no-response")
 
 
 def _log_connected(model: str) -> None:
+    # ... (Implementasi Anda untuk _log_connected) ...
     global _CONNECTED_FLAG
     if not _CONNECTED_FLAG:
         logger.info("Gemini connected via model %s [ok]", model)
@@ -204,6 +219,7 @@ def _log_connected(model: str) -> None:
 
 
 def _extract_text(line: str) -> List[str]:
+    # ... (Implementasi Anda untuk _extract_text) ...
     try: data = json.loads(line)
     except json.JSONDecodeError: return []
     chunks: List[str] = []
@@ -215,8 +231,8 @@ def _extract_text(line: str) -> List[str]:
             if text: chunks.append(text)
     return chunks
 
-# Sisa fungsi lainnya tetap sama, tidak perlu diubah.
-# summarize_for_memory, _split_sentences, etc.
+# Anda perlu memastikan fungsi-fungsi helper lainnya (seperti summarize_for_memory)
+# tetap ada dan berfungsi di file ini.
 def summarize_for_memory(user_text: str) -> Tuple[str, str]:
     normalized = " ".join(user_text.split())
     lower_text = normalized.lower()

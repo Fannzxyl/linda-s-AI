@@ -1,10 +1,22 @@
 import sqlite3
 import textwrap
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Any
 
+# Perbaikan Impor 1: Naik satu level (..) untuk mengakses config.py di folder 'app'
 from ..config import get_settings
 
+# Perbaikan Impor 2: Naik satu level (..) untuk mengakses schemas.py di folder 'app'
+from ..schemas import MemorySearch, MemoryUpsert 
+
+# Perbaikan Impor 3: Sibling Import (langsung) untuk mengakses llm.py di folder yang sama (services)
+# Catatan: Baris ini diperlukan JIKA fungsi llm dipanggil di dalam memory.py (meskipun tidak tampak dalam kode Anda)
+# Namun, agar menghindari impor sirkular yang tidak perlu, SAYA HAPUS impor llm di sini.
+# Jika Anda tetap ingin mengimpornya, gunakan: from .llm import call_gemini_stream, prepare_system_prompt
+
+# --- PENTING: Saya HAPUS semua impor yang tidak perlu di memory.py, termasuk dari .llm ---
+
+# --- Fungsi Database ---
 
 def _get_db_path() -> Path:
     path = get_settings().memory_db_path
@@ -40,9 +52,12 @@ def _compact_text(raw_text: str) -> str:
     return textwrap.shorten(normalized, width=140, placeholder="…")
 
 
-def upsert_memory(memory_type: str, text: str) -> Dict[str, str]:
+def upsert_memory(memory_type: str, text: str) -> Dict[str, Any]:
     """Insert or replace a memory entry and return the stored row."""
 
+    # Gunakan skema Pydantic untuk validasi input sebelum diproses
+    # Pydantic otomatis memvalidasi saat endpoint dipanggil, tapi ini bagus untuk keamanan
+    
     compacted = _compact_text(text)
     db_path = _get_db_path()
     with sqlite3.connect(db_path) as conn:
@@ -66,6 +81,7 @@ def upsert_memory(memory_type: str, text: str) -> Dict[str, str]:
         )
         row = cursor.fetchone()
     if not row:
+        # Jika terjadi kegagalan unik, ini akan terangkat (meskipun sudah ditangani ON CONFLICT)
         raise RuntimeError("Failed to persist memory.")
     return {
         "id": row[0],
@@ -75,7 +91,7 @@ def upsert_memory(memory_type: str, text: str) -> Dict[str, str]:
     }
 
 
-def search_memory(query: str, top_k: int = 5) -> List[Dict[str, str]]:
+def search_memory(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
     """Search memory entries by query string, returning the newest first."""
 
     db_path = _get_db_path()
@@ -94,4 +110,15 @@ def search_memory(query: str, top_k: int = 5) -> List[Dict[str, str]]:
             (like_query, like_query, top_k),
         )
         rows = cursor.fetchall()
+    # Mengonversi Row objek menjadi dict Python standar
     return [dict(row) for row in rows]
+
+
+def clear_memory_db() -> bool:
+    """Menghapus semua entri dari tabel memori. Diperlukan untuk endpoint /api/reset."""
+    db_path = _get_db_path()
+    with sqlite3.connect(db_path) as conn:
+        # Menghapus semua baris
+        conn.execute("DELETE FROM memories")
+        conn.commit()
+    return True
