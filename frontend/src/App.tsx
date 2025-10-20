@@ -1,7 +1,6 @@
-// C:\Alfan\linda-s-AI\frontend\src\App.tsx (FINAL FULLCODE)
+// C:\Alfan\linda-s-AI\frontend\src\App.tsx (FINAL FULLCODE DENGAN YANDERE & SAVE CHAT + FIX MULTIMODAL OPTIMISTIC UI)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-// Import React.Dispatch dan React.SetStateAction untuk typing yang benar
 import type { Dispatch, SetStateAction } from "react"; 
 import Avatar, { AvatarState, Emotion } from "./components/Avatar"; 
 import Chat, { Msg } from "./components/Chat";
@@ -32,6 +31,8 @@ function useLocalStorage<T>(key: string, initial: T) {
 // Helper untuk memetakan nama style ke Emotion yang akan digunakan oleh Avatar
 function toPersona(s: string) {
   const v = s.toLowerCase();
+  // --- PERUBAHAN 1: MENAMBAHKAN YANDERE ---
+  if (v.includes("yandere")) return "yandere";
   if (v.includes("tsundere")) return "tsundere";
   if (v.includes("formal")) return "formal";
   if (v.includes("santai")) return "santai";
@@ -66,7 +67,9 @@ export default function App() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [typing, setTyping] = useState(false);
-  const [messages, setMessages] = useState<Msg[]>([
+  
+  // --- PERUBAHAN 2: MENGGUNAKAN useLocalStorage UNTUK MENYIMPAN CHAT ---
+  const [messages, setMessages] = useLocalStorage<Msg[]>("chatHistory", [
     {
       id: crypto.randomUUID(),
       role: "assistant",
@@ -90,7 +93,6 @@ export default function App() {
         return;
     }
     
-    // Batasan ukuran file (misalnya, 5MB)
     if (file.size > 5 * 1024 * 1024) {
         alert("File terlalu besar. Maksimal 5MB.");
         return;
@@ -98,11 +100,10 @@ export default function App() {
 
     const reader = new FileReader();
     reader.onloadend = () => {
-        // reader.result adalah string Base64 (eg: "data:image/jpeg;base64,...")
         setImageBase64(reader.result as string);
         setImagePreviewUrl(URL.createObjectURL(file)); 
     };
-    reader.readAsDataURL(file); // Memulai konversi ke Base64
+    reader.readAsDataURL(file);
   }
 
   // autoscroll
@@ -117,31 +118,37 @@ export default function App() {
   // kirim pesan
   async function onSend() {
     const text = input.trim();
-    // IZINKAN pengiriman jika ada teks ATAU gambar
     if ((!text && !imageBase64) || sending) return; 
 
     setInput("");
     setSending(true);
     setTyping(true);
+
+    // --- PERBAIKAN: HAPUS PREVIEW SEGERA (OPTIMISTIC UI) ---
+    // Simpan data gambar saat ini untuk pesan user
+    const currentImageBase64 = imageBase64;
+    const currentImagePreviewUrl = imagePreviewUrl;
+
+    // Bersihkan state gambar di composer SEGERA
+    setImageBase64(null); 
+    setImagePreviewUrl(null); 
+    if(fileInputRef.current) fileInputRef.current.value = ''; 
+    // ----------------------------------------------------
     
-    // Buat pesan pengguna (teks)
     const userMsg: Msg = { 
         id: crypto.randomUUID(), 
         role: "user", 
         content: text || "(Gambar terkirim.)", 
-        image_url: imagePreviewUrl // Tambahkan URL pratinjau untuk tampilan di chat bubble
+        image_url: currentImagePreviewUrl // Gunakan URL yang disimpan
     };
 
-    // Tambahkan pesan ke riwayat sebelum mengirim
-    setMessages((m) => [...m, userMsg]);
+    const updatedMessages = [...messages, userMsg];
+    setMessages(updatedMessages);
 
-    const history = messages
+    const history = updatedMessages
       .filter((x) => x.role !== "system")
-      .concat(userMsg)
-      // Map untuk membuat payload yang bersih, sesuai schema backend
       .map(({ role, content }) => ({ role, content })); 
 
-    // Coba SSE
     let finalText = "";
     try {
       const res = await fetch(CHAT_URL, {
@@ -150,11 +157,10 @@ export default function App() {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
         },
-        // PERUBAHAN PENTING: TAMBAH image_base64 di payload
         body: JSON.stringify({ 
             messages: history, 
-            persona: persona,
-            image_base64: imageBase64 // Meneruskan Base64
+            persona: styleName,
+            image_base64: currentImageBase64 // Gunakan Base64 yang disimpan
         }),
       });
 
@@ -198,13 +204,8 @@ export default function App() {
           }
         }
 
-        // Setelah streaming selesai:
         setTyping(false);
         setSending(false);
-        setImageBase64(null); 
-        setImagePreviewUrl(null); 
-        if(fileInputRef.current) fileInputRef.current.value = ''; 
-
         if (finalText.trim()) await updateEmotion(finalText.trim(), persona, setAvatar);
         return;
       }
@@ -217,8 +218,7 @@ export default function App() {
       const res = await fetch(CHAT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // PERUBAHAN PENTING: Tambahkan image_base64 di payload fallback
-        body: JSON.stringify({ messages: history, persona: persona, image_base64: imageBase64 }), 
+        body: JSON.stringify({ messages: history, persona: styleName, image_base64: currentImageBase64 }), 
       });
       let reply = "Baik. Ada lagi?";
       if (res.ok) {
@@ -244,9 +244,6 @@ export default function App() {
     } finally {
       setTyping(false);
       setSending(false);
-      setImageBase64(null); 
-      setImagePreviewUrl(null); 
-      if(fileInputRef.current) fileInputRef.current.value = '';
     }
   }
 
@@ -257,27 +254,21 @@ export default function App() {
     }
   }
 
-  // --- FUNGSI onClear DIPERBAIKI: Mengatasi Error 422 ---
   async function onClear() {
-    // 1. Reset tampilan pesan lokal segera
     setMessages([
         { id: crypto.randomUUID(), role: "assistant", content: "Halo! Aku siap bantu. Tulis pesanmu di bawah." },
     ]); 
 
-    // 2. Kirim permintaan reset ke server (backend)
     try {
-      // Endpoint /api/reset harus di-POST
       await fetch(RESET_URL, { method: "POST" });
     } catch (e) {
       console.error("Gagal mereset server:", e);
     }
     
-    // 3. Clear semua state multimodal
     setImageBase64(null); 
     setImagePreviewUrl(null); 
     if(fileInputRef.current) fileInputRef.current.value = '';
 
-    // 4. Fokuskan input
     setTimeout(() => {
       document
         .querySelector<HTMLTextAreaElement>("textarea.textarea")
@@ -312,6 +303,8 @@ export default function App() {
               onChange={(e) => setStyleName(e.target.value)}
             >
               <option>Tsundere</option>
+              {/* --- PERUBAHAN 3: MENAMBAHKAN YANDERE --- */}
+              <option>Yandere</option>
               <option>Ceria</option>
               <option>Santai</option>
               <option>Formal</option>
@@ -333,7 +326,6 @@ export default function App() {
           <Chat refDiv={listRef} messages={messages} typing={typing} />
 
           <div className="composer">
-            {/* AREA PREVIEW GAMBAR BARU */}
             {imagePreviewUrl && (
                 <div className="image-preview-container">
                     <img src={imagePreviewUrl} alt="Preview" className="image-preview" />
@@ -351,7 +343,6 @@ export default function App() {
             )}
             
             <div className="input">
-              {/* INPUT FILE BARU */}
               <input
                   type="file"
                   accept="image/*"
@@ -377,7 +368,6 @@ export default function App() {
               />
               <button
                 className="send"
-                // Izinkan pengiriman jika ada teks ATAU gambar
                 disabled={(!input.trim() && !imageBase64) || sending} 
                 onClick={onSend}
               >
@@ -397,8 +387,6 @@ export default function App() {
   );
 }
 
-/* panggil /api/emotion */
-// PERBAIKAN TYPING: Menggunakan React.Dispatch<React.SetStateAction<...>> untuk setter function
 async function updateEmotion(
   text: string,
   persona: string,
@@ -412,7 +400,6 @@ async function updateEmotion(
     });
     if (!res.ok) throw new Error(String(res.status));
     const j = await res.json();
-    // Gunakan setAvatar dengan state baru (tidak menggunakan callback)
     setAvatar({ 
       emotion: (j.emotion as Emotion) ?? "neutral", 
       blink: j.blink ?? true,
@@ -421,7 +408,6 @@ async function updateEmotion(
       glow: j.glow ?? "#a78bfa",
     });
   } catch {
-    // Perbaikan typing pada callback
     setAvatar((a: AvatarState) => ({ ...a, wink: false, headSwaySpeed: 1.0 }));
   }
 }

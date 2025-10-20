@@ -1,3 +1,5 @@
+/* C:\Alfan\linda-s-AI\frontend\src\index.css */
+
 /* ====== THEME TOKENS ====== */
 :root{
   color-scheme: dark;
@@ -21,6 +23,7 @@ body[data-persona="ceria"]{ --primary:#ffb86b; --accent:#ffd166; --ring: rgba(25
 body[data-persona="santai"]{ --primary:#34d399; --accent:#22c55e; --ring: rgba(52,211,153,.28) }
 body[data-persona="formal"]{ --primary:#60a5fa; --accent:#3b82f6; --ring: rgba(96,165,250,.28) }
 body[data-persona="tsundere"]{ --primary:#f472b6; --accent:#fb7185; --ring: rgba(244,114,182,.28) }
+body[data-persona="yandere"]{ --primary:#ec4899; --accent:#e11d48; --ring: rgba(236,72,153,.28) }
 body[data-persona="netral"]{ --primary:#6ea8ff; --accent:#a855f7; --ring: rgba(110,168,255,.28) }
 
 /* ====== RESET ====== */
@@ -123,12 +126,14 @@ body{
 }
 .label{ font-size:.9rem; color:#cbd5f5 }
 .select, .checkbox{
-  background: rgba(15,23,42,.65);
+  /* GANTI BACKGROUND KE SOLID DAN TAMBAH COLOR-SCHEME UNTUK FIX DROPDOWN */
+  background: #0f172a; 
   color: #e2e8f0;
   border-radius: 12px;
   border: 1px solid rgba(148,163,184,.28);
   padding: .6rem .8rem;
   outline:none;
+  color-scheme: dark; /* Memaksa dark mode pada dropdown */
 }
 .checkbox-wrap{ display:flex; align-items:center; gap:.6rem }
 
@@ -201,32 +206,31 @@ body{
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-/* --- BARU: Gambar yang Diunggah di dalam Bubble Chat --- */
+/* --- PERBAIKAN UKURAN GAMBAR PADA BUBBLE --- */
 .uploaded-image {
-    max-width: 100%; 
-    max-height: 400px; 
-    object-fit: contain; 
-    border-radius: 12px; 
-    display: block; 
-    
-    /* Tambahkan style jika gambar di dalam bubble */
-    margin-bottom: 0.8rem;
-    
-    /* Memastikan gambar selalu berada di atas teks jika ada*/
-    order: -1; 
+  /* Batasan Lebar: Maks 65% atau 520px untuk desktop */
+  max-width: min(65%, 520px); 
+  
+  max-height: 340px; /* Batasi tinggi agar tidak terlalu dominan (320-360px) */
+  border-radius: 12px; 
+  object-fit: cover; 
+  margin-bottom: 8px; 
+  cursor: zoom-in; 
+  display: block;
 }
 
-/* Menghapus margin bawah bubble jika hanya ada gambar atau hanya teks */
-.bubble:has(.uploaded-image) {
-    /* Mengubah bubble menjadi container flex vertikal saat ada gambar */
-    display: flex;
-    flex-direction: column;
-    /* Sesuaikan padding jika gambar dan teks ada */
-    padding-bottom: 0.95rem;
+/* Tambahkan media query untuk batasan mobile */
+@media (max-width: 640px) {
+  .uploaded-image {
+    max-width: 90%; /* Lebar maks 90% untuk mobile */
+  }
 }
-.bubble:has(.uploaded-image) .uploaded-image:last-child {
-    margin-bottom: 0; /* Hapus margin bawah jika gambar adalah item terakhir */
+
+/* Menghapus margin bawah jika hanya ada gambar di bubble */
+.bubble > .uploaded-image:only-child {
+  margin-bottom: 0;
 }
+/* -------------------------------------------------- */
 
 
 /* Composer */
@@ -263,25 +267,23 @@ body{
   margin-top:6px; display:flex; justify-content:space-between; color:var(--muted); font-size:.8rem;
 }
 
-/* --- BARU: Gaya Tombol Upload --- */
 .upload-label {
     cursor: pointer;
     font-size: 1.5rem;
     line-height: 1;
     color: var(--muted);
     transition: color .2s ease;
-    padding: 0 4px 5px 4px; /* Align dengan tombol send */
+    padding: 0 4px 5px 4px;
     align-self: flex-end;
 }
 .upload-label:hover {
     color: var(--primary);
 }
 
-/* --- BARU: Gaya Preview Gambar --- */
 .image-preview-container {
     position: relative;
     max-width: 200px;
-    margin: 0 16px 12px auto; /* Margin atas dari input, margin auto kanan untuk align user */
+    margin-bottom: 12px;
     border-radius: 14px;
     overflow: hidden;
     box-shadow: 0 4px 15px rgba(0,0,0,.3);
@@ -318,13 +320,9 @@ body{
 .dot:nth-child(2){ animation-delay:.2s } .dot:nth-child(3){ animation-delay:.4s }
 @keyframes bd{ 0%,80%,100%{ transform:translateY(0); opacity:.4 } 40%{ transform:translateY(-4px); opacity:1 } }
 
-/* ====== AVATAR REACTIVE ====== */
-/* ... (Gaya Avatar tetap sama, tidak diubah) ... */
-
 /* ====== RESPONSIVE OPTIMIZATION ====== */
 @media (max-width: 980px){
   .layout{ 
-    /* Mengubah tata letak menjadi satu kolom tumpuk untuk HP */
     grid-template-columns: 1fr; 
     gap: var(--gap3); 
     width:100%; 
@@ -332,7 +330,6 @@ body{
   }
   
   .sidebar {
-    /* Sidebar akan muncul di atas chat, tapi pastikan ia tidak memakan terlalu banyak ruang */
     order: -1; 
     padding: 12px;
   }
@@ -347,13 +344,11 @@ body{
     max-width: 94% 
   }
   
-  /* Avatar di HP: Batasi ketinggian agar tidak terlalu dominan */
   .avatar-card{
     max-height: 250px; 
-    aspect-ratio: 16/9; /* Ubah rasio untuk tampilan landscape HP */
+    aspect-ratio: 16/9;
   }
   
-  /* Composer di HP */
   .composer {
       padding: var(--gap2) var(--gap3) calc(var(--gap3) + var(--safe-bottom));
   }
@@ -376,7 +371,6 @@ body{
 .avatar-frame{ 
   position: relative; 
   width: 100%; 
-  /* RASIO: 1:1 sesuai gambar */
   aspect-ratio: 1 / 1; 
   overflow: hidden; 
   border-radius: 18px; 
@@ -393,7 +387,6 @@ body{
   will-change: opacity, transform; 
   user-select: none; 
 } 
-/* === TRANSISI HALUS (CUBIC-BEZIER) === */
 .avatar-img.front{ 
   opacity: 0;
   transition: opacity 0.28s cubic-bezier(.22, .61, .36, 1);
