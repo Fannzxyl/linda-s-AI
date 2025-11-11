@@ -1,5 +1,8 @@
+// C:\Alfan\linda-s-AI\frontend\src\App.tsx (FINAL FULLCODE DENGAN YANDERE & SAVE CHAT + FIX MULTIMODAL OPTIMISTIC UI)
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import Avatar, { AvatarState, Emotion } from "./components/Avatar"; // Import AvatarState dan Emotion
+import type { Dispatch, SetStateAction } from "react"; 
+import Avatar, { AvatarState, Emotion } from "./components/Avatar"; 
 import Chat, { Msg } from "./components/Chat";
 
 /* ENDPOINT (samakan dengan proxy vite) */
@@ -28,6 +31,8 @@ function useLocalStorage<T>(key: string, initial: T) {
 // Helper untuk memetakan nama style ke Emotion yang akan digunakan oleh Avatar
 function toPersona(s: string) {
   const v = s.toLowerCase();
+  // --- PERUBAHAN 1: MENAMBAHKAN YANDERE ---
+  if (v.includes("yandere")) return "yandere";
   if (v.includes("tsundere")) return "tsundere";
   if (v.includes("formal")) return "formal";
   if (v.includes("santai")) return "santai";
@@ -62,13 +67,44 @@ export default function App() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [typing, setTyping] = useState(false);
-  const [messages, setMessages] = useState<Msg[]>([
+  
+  // --- PERUBAHAN 2: MENGGUNAKAN useLocalStorage UNTUK MENYIMPAN CHAT ---
+  const [messages, setMessages] = useLocalStorage<Msg[]>("chatHistory", [
     {
       id: crypto.randomUUID(),
       role: "assistant",
-      content: "Halo! Aku siap bantu. Tulis pesanmu di bawah.",
+      content: "Nihaooooo!! Aku linda siap menjadi teman ngobrol mu.",
     },
   ]);
+
+  // --- STATE BARU UNTUK MULTIMODAL ---
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+
+  // --- FUNGSI BARU: Konversi File ke Base64 ---
+  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+        alert("Hanya file gambar (JPEG, PNG, WEBP) yang didukung.");
+        return;
+    }
+    
+    if (file.size > 5 * 1024 * 1024) {
+        alert("File terlalu besar. Maksimal 5MB.");
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+        setImageBase64(reader.result as string);
+        setImagePreviewUrl(URL.createObjectURL(file)); 
+    };
+    reader.readAsDataURL(file);
+  }
 
   // autoscroll
   const listRef = useRef<HTMLDivElement>(null);
@@ -82,21 +118,37 @@ export default function App() {
   // kirim pesan
   async function onSend() {
     const text = input.trim();
-    if (!text || sending) return;
+    if ((!text && !imageBase64) || sending) return; 
 
     setInput("");
     setSending(true);
     setTyping(true);
 
-    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: text };
-    setMessages((m) => [...m, userMsg]);
+    // --- PERBAIKAN: HAPUS PREVIEW SEGERA (OPTIMISTIC UI) ---
+    // Simpan data gambar saat ini untuk pesan user
+    const currentImageBase64 = imageBase64;
+    const currentImagePreviewUrl = imagePreviewUrl;
 
-    const history = messages
+    // Bersihkan state gambar di composer SEGERA
+    setImageBase64(null); 
+    setImagePreviewUrl(null); 
+    if(fileInputRef.current) fileInputRef.current.value = ''; 
+    // ----------------------------------------------------
+    
+    const userMsg: Msg = { 
+        id: crypto.randomUUID(), 
+        role: "user", 
+        content: text || "(Gambar terkirim.)", 
+        image_url: currentImagePreviewUrl // Gunakan URL yang disimpan
+    };
+
+    const updatedMessages = [...messages, userMsg];
+    setMessages(updatedMessages);
+
+    const history = updatedMessages
       .filter((x) => x.role !== "system")
-      .concat(userMsg)
-      .map(({ role, content }) => ({ role, content }));
+      .map(({ role, content }) => ({ role, content })); 
 
-    // coba SSE
     let finalText = "";
     try {
       const res = await fetch(CHAT_URL, {
@@ -105,7 +157,11 @@ export default function App() {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
         },
-        body: JSON.stringify({ messages: history, style: persona, persona }),
+        body: JSON.stringify({ 
+            messages: history, 
+            persona: styleName,
+            image_base64: currentImageBase64 // Gunakan Base64 yang disimpan
+        }),
       });
 
       if (res.ok && res.body) {
@@ -150,7 +206,6 @@ export default function App() {
 
         setTyping(false);
         setSending(false);
-
         if (finalText.trim()) await updateEmotion(finalText.trim(), persona, setAvatar);
         return;
       }
@@ -163,7 +218,7 @@ export default function App() {
       const res = await fetch(CHAT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history, style: persona, persona }),
+        body: JSON.stringify({ messages: history, persona: styleName, image_base64: currentImageBase64 }), 
       });
       let reply = "Baik. Ada lagi?";
       if (res.ok) {
@@ -201,18 +256,19 @@ export default function App() {
 
   async function onClear() {
     setMessages([
-      { id: crypto.randomUUID(), role: "assistant", content: "Mulai baru." },
-    ]);
+        { id: crypto.randomUUID(), role: "assistant", content: "Halo! Aku siap bantu. Tulis pesanmu di bawah." },
+    ]); 
+
     try {
       await fetch(RESET_URL, { method: "POST" });
-    } catch {}
-    try {
-      await fetch(CHAT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reset: true, style: persona, persona }),
-      });
-    } catch {}
+    } catch (e) {
+      console.error("Gagal mereset server:", e);
+    }
+    
+    setImageBase64(null); 
+    setImagePreviewUrl(null); 
+    if(fileInputRef.current) fileInputRef.current.value = '';
+
     setTimeout(() => {
       document
         .querySelector<HTMLTextAreaElement>("textarea.textarea")
@@ -235,7 +291,6 @@ export default function App() {
           <div className="avatar-card">
             <div className="avatar-glow" />
             <div className="avatar-canvas">
-              {/* PENGGUNAAN KOMPONEN AVATAR BARU */}
               <Avatar state={avatar} typing={typing} />
             </div>
           </div>
@@ -248,6 +303,8 @@ export default function App() {
               onChange={(e) => setStyleName(e.target.value)}
             >
               <option>Tsundere</option>
+              {/* --- PERUBAHAN 3: MENAMBAHKAN YANDERE --- */}
+              <option>Yandere</option>
               <option>Ceria</option>
               <option>Santai</option>
               <option>Formal</option>
@@ -269,7 +326,35 @@ export default function App() {
           <Chat refDiv={listRef} messages={messages} typing={typing} />
 
           <div className="composer">
+            {imagePreviewUrl && (
+                <div className="image-preview-container">
+                    <img src={imagePreviewUrl} alt="Preview" className="image-preview" />
+                    <button 
+                        className="clear-image-btn" 
+                        onClick={() => {
+                            setImageBase64(null);
+                            setImagePreviewUrl(null);
+                            if(fileInputRef.current) fileInputRef.current.value = '';
+                        }}
+                    >
+                        &times;
+                    </button>
+                </div>
+            )}
+            
             <div className="input">
+              <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileChange}
+                  style={{ display: 'none' }}
+                  id="file-upload"
+                  ref={fileInputRef}
+              />
+              <label htmlFor="file-upload" className="upload-label">
+                  📸
+              </label>
+              
               <textarea
                 className="textarea"
                 placeholder="Tulis pesanmu…"
@@ -283,7 +368,7 @@ export default function App() {
               />
               <button
                 className="send"
-                disabled={!input.trim() || sending}
+                disabled={(!input.trim() && !imageBase64) || sending} 
                 onClick={onSend}
               >
                 {sending ? "Mengirim…" : "Kirim"}
@@ -302,11 +387,10 @@ export default function App() {
   );
 }
 
-/* panggil /api/emotion */
 async function updateEmotion(
   text: string,
   persona: string,
-  setAvatar: (s: AvatarState) => void
+  setAvatar: Dispatch<SetStateAction<AvatarState>>
 ) {
   try {
     const res = await fetch(EMOTION_URL, {
@@ -316,15 +400,14 @@ async function updateEmotion(
     });
     if (!res.ok) throw new Error(String(res.status));
     const j = await res.json();
-    setAvatar({
-      emotion: (j.emotion as Emotion) ?? "neutral", // Pastikan tipe data sesuai Emotion
+    setAvatar({ 
+      emotion: (j.emotion as Emotion) ?? "neutral", 
       blink: j.blink ?? true,
       wink: j.wink ?? false,
       headSwaySpeed: Math.min(1.6, Math.max(0.6, j.headSwaySpeed ?? 1.0)),
       glow: j.glow ?? "#a78bfa",
     });
   } catch {
-    setAvatar((a) => ({ ...a, wink: false, headSwaySpeed: 1.0 }));
+    setAvatar((a: AvatarState) => ({ ...a, wink: false, headSwaySpeed: 1.0 }));
   }
 }
-

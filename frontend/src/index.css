@@ -1,3 +1,5 @@
+/* C:\Alfan\linda-s-AI\frontend\src\index.css */
+
 /* ====== THEME TOKENS ====== */
 :root{
   color-scheme: dark;
@@ -21,6 +23,7 @@ body[data-persona="ceria"]{ --primary:#ffb86b; --accent:#ffd166; --ring: rgba(25
 body[data-persona="santai"]{ --primary:#34d399; --accent:#22c55e; --ring: rgba(52,211,153,.28) }
 body[data-persona="formal"]{ --primary:#60a5fa; --accent:#3b82f6; --ring: rgba(96,165,250,.28) }
 body[data-persona="tsundere"]{ --primary:#f472b6; --accent:#fb7185; --ring: rgba(244,114,182,.28) }
+body[data-persona="yandere"]{ --primary:#ec4899; --accent:#e11d48; --ring: rgba(236,72,153,.28) }
 body[data-persona="netral"]{ --primary:#6ea8ff; --accent:#a855f7; --ring: rgba(110,168,255,.28) }
 
 /* ====== RESET ====== */
@@ -104,7 +107,13 @@ body{
   position:absolute; inset:16% 22%; filter:blur(30px);
   background: radial-gradient(circle, color-mix(in oklab, var(--primary), #ffffff 20%) 30%, transparent 70%);
   opacity:.65;
+  transition: opacity .4s ease-out; /* Transisi untuk glow */
 }
+/* Menurunkan opasitas glow saat Avatar tidak typing */
+.avatar-card:not(:has(.avatar-speaking)){ 
+  .avatar-glow { opacity: .35; }
+}
+
 .avatar-canvas{ position:relative; z-index:2 }
 
 /* Controls */
@@ -117,12 +126,14 @@ body{
 }
 .label{ font-size:.9rem; color:#cbd5f5 }
 .select, .checkbox{
-  background: rgba(15,23,42,.65);
+  /* GANTI BACKGROUND KE SOLID DAN TAMBAH COLOR-SCHEME UNTUK FIX DROPDOWN */
+  background: #0f172a; 
   color: #e2e8f0;
   border-radius: 12px;
   border: 1px solid rgba(148,163,184,.28);
   padding: .6rem .8rem;
   outline:none;
+  color-scheme: dark; /* Memaksa dark mode pada dropdown */
 }
 .checkbox-wrap{ display:flex; align-items:center; gap:.6rem }
 
@@ -195,6 +206,33 @@ body{
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+/* --- PERBAIKAN UKURAN GAMBAR PADA BUBBLE --- */
+.uploaded-image {
+  /* Batasan Lebar: Maks 65% atau 520px untuk desktop */
+  max-width: min(65%, 520px); 
+  
+  max-height: 340px; /* Batasi tinggi agar tidak terlalu dominan (320-360px) */
+  border-radius: 12px; 
+  object-fit: cover; 
+  margin-bottom: 8px; 
+  cursor: zoom-in; 
+  display: block;
+}
+
+/* Tambahkan media query untuk batasan mobile */
+@media (max-width: 640px) {
+  .uploaded-image {
+    max-width: 90%; /* Lebar maks 90% untuk mobile */
+  }
+}
+
+/* Menghapus margin bawah jika hanya ada gambar di bubble */
+.bubble > .uploaded-image:only-child {
+  margin-bottom: 0;
+}
+/* -------------------------------------------------- */
+
+
 /* Composer */
 .composer{
   position: sticky; bottom:0;
@@ -229,73 +267,110 @@ body{
   margin-top:6px; display:flex; justify-content:space-between; color:var(--muted); font-size:.8rem;
 }
 
+.upload-label {
+    cursor: pointer;
+    font-size: 1.5rem;
+    line-height: 1;
+    color: var(--muted);
+    transition: color .2s ease;
+    padding: 0 4px 5px 4px;
+    align-self: flex-end;
+}
+.upload-label:hover {
+    color: var(--primary);
+}
+
+.image-preview-container {
+    position: relative;
+    max-width: 200px;
+    margin-bottom: 12px;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 4px 15px rgba(0,0,0,.3);
+    border: 1px solid rgba(148,163,184,.2);
+}
+.image-preview {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+.clear-image-btn {
+    position: absolute;
+    top: 5px; right: 5px;
+    background: rgba(15,23,42,.7);
+    color: white;
+    border: 1px solid rgba(255,255,255,.3);
+    border-radius: 50%;
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    cursor: pointer;
+    font-weight: 700;
+    line-height: 1;
+    padding: 0;
+    opacity: .8;
+    transition: opacity .2s ease;
+}
+.clear-image-btn:hover {
+    opacity: 1;
+}
+
 /* Typing dots */
 .typing{ display:inline-flex; gap:6px }
 .dot{ width:6px; height:6px; border-radius:999px; background:#cbd5f5; opacity:.5; animation: bd 1.2s infinite ease-in-out }
 .dot:nth-child(2){ animation-delay:.2s } .dot:nth-child(3){ animation-delay:.4s }
 @keyframes bd{ 0%,80%,100%{ transform:translateY(0); opacity:.4 } 40%{ transform:translateY(-4px); opacity:1 } }
 
-/* ====== AVATAR REACTIVE ====== */
-.avatar-wrap{
-  width: 100%;
-  height: clamp(220px, 38vh, 420px);
-  border-radius: 18px;
-  background: radial-gradient(120% 80% at 50% 30%, rgba(20,28,48,.7), rgba(6,10,22,.9));
-  position: relative;
-  overflow: hidden;
-  box-shadow: var(--shadow);
-  border:1px solid rgba(148,163,184,.14);
-  --tx: 0;
-  --ty: 0;
-}
-.avatar-svg{ width:100%; height:100%; display:block }
-
-.head{
-  transform-origin: 200px 140px;
-  animation: head-sway 6s ease-in-out infinite;
-}
-@keyframes head-sway{
-  0%{ transform: rotate(-1.2deg) translateY(0) }
-  50%{ transform: rotate(1.2deg) translateY(1px) }
-  100%{ transform: rotate(-1.2deg) translateY(0) }
-}
-
-.hair-back{
-  transform-origin: 200px 120px;
-  animation: hair-sway 5.6s ease-in-out infinite;
-  opacity:.95;
-}
-.hair-front{
-  transform-origin: 200px 90px;
-  animation: hair-sway 4.2s ease-in-out infinite;
-}
-@keyframes hair-sway{
-  0%{ transform: rotate(-2deg) }
-  50%{ transform: rotate(2deg) }
-  100%{ transform: rotate(-2deg) }
-}
-
-.mouth.speaking path{ animation: talk .28s ease-in-out infinite }
-@keyframes talk{
-  0%{ d: path("M180,165 Q200,175 220,165") }
-  50%{ d: path("M180,167 Q200,182 220,167") }
-  100%{ d: path("M180,165 Q200,175 220,165") }
-}
-
-/* ====== RESPONSIVE ====== */
+/* ====== RESPONSIVE OPTIMIZATION ====== */
 @media (max-width: 980px){
-  .layout{ grid-template-columns: 1fr; gap: var(--gap4); width:100%; padding: var(--gap3) }
-  .chat{ border-radius: 16px }
-  .sidebar{ border-radius: 16px }
-  .msg{ max-width: 94% }
-  .avatar-wrap{ height: clamp(220px, 42vh, 420px); border-radius: 16px }
+  .layout{ 
+    grid-template-columns: 1fr; 
+    gap: var(--gap3); 
+    width:100%; 
+    padding: var(--gap3);
+  }
+  
+  .sidebar {
+    order: -1; 
+    padding: 12px;
+  }
+  
+  .chat{ 
+    border-radius: 16px 
+  }
+  .sidebar{ 
+    border-radius: 16px 
+  }
+  .msg{ 
+    max-width: 94% 
+  }
+  
+  .avatar-card{
+    max-height: 250px; 
+    aspect-ratio: 16/9;
+  }
+  
+  .composer {
+      padding: var(--gap2) var(--gap3) calc(var(--gap3) + var(--safe-bottom));
+  }
+  .input {
+      padding: 8px;
+  }
+  .send {
+      min-width: 80px; 
+      height: 38px;
+  }
+  .textarea {
+      font-size: .95rem;
+  }
+  .upload-label {
+      font-size: 1.3rem;
+  }
 }
 
 /* Avatar compositor */ 
 .avatar-frame{ 
   position: relative; 
   width: 100%; 
-  /* RASIO: 1:1 sesuai gambar */
   aspect-ratio: 1 / 1; 
   overflow: hidden; 
   border-radius: 18px; 
@@ -306,14 +381,12 @@ body{
   inset:0; 
   width:100%; 
   height:100%; 
-  object-fit: cover; /* cegah layout shift */ 
-  /* PERBAIKAN CROP: Atur posisi objek ke atas untuk menampilkan lebih banyak bagian bawah (pakaian) */
+  object-fit: cover; 
   object-position: center top; 
-  transform: translateZ(0); /* aktifkan compositing */ 
+  transform: translateZ(0); 
   will-change: opacity, transform; 
   user-select: none; 
 } 
-/* === TRANSISI HALUS (CUBIC-BEZIER) === */
 .avatar-img.front{ 
   opacity: 0;
   transition: opacity 0.28s cubic-bezier(.22, .61, .36, 1);
@@ -323,7 +396,7 @@ body{
 } 
 .avatar-img.back{ 
   opacity: 1 
-} /* selalu ada di bawah */ 
+} 
 
 /* Overlay (wink/blink) */ 
 .avatar-overlay{ 
