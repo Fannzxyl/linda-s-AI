@@ -1,9 +1,17 @@
-// C:\Alfan\linda-s-AI\frontend\src\App.tsx (FINAL FULLCODE DENGAN YANDERE & SAVE CHAT + FIX MULTIMODAL OPTIMISTIC UI)
+// C:\Alfan\linda-s-AI\frontend\src\App.tsx (ENHANCED VERSION WITH ALL IMPROVEMENTS)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react"; 
 import Avatar, { AvatarState, Emotion } from "./components/Avatar"; 
 import Chat, { Msg } from "./components/Chat";
+import ErrorMessage from "./components/ErrorMessage";
+import SettingsPanel from "./components/SettingsPanel";
+import MoodIndicator from "./components/MoodIndicator";
+import ChatStats from "./components/ChatStats";
+import { exportChatAsText, exportChatAsJSON } from "./utils/chatExport";
+import { calculateMood, getMoodGreeting } from "./utils/moodSystem";
+import { parseError, getLindasErrorResponse } from "./utils/errorHandler";
+import { setupKeyboardShortcuts, ShortcutAction } from "./utils/keyboardShortcuts";
 
 /* ENDPOINT (samakan dengan proxy vite) */
 const CHAT_URL = "/api/chat";
@@ -68,7 +76,7 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [typing, setTyping] = useState(false);
   
-  // --- PERUBAHAN 2: MENGGUNAKAN useLocalStorage UNTUK MENYIMPAN CHAT ---
+  // --- ENHANCED: Chat history with localStorage ---
   const [messages, setMessages] = useLocalStorage<Msg[]>("chatHistory", [
     {
       id: crypto.randomUUID(),
@@ -81,6 +89,67 @@ export default function App() {
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // --- NEW: Enhanced features state ---
+  const [error, setError] = useState<any>(null);
+  const [moodEnabled, setMoodEnabled] = useLocalStorage("moodEnabled", true);
+  const [lastInteraction, setLastInteraction] = useLocalStorage("lastInteraction", Date.now());
+  const [showSettings, setShowSettings] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  
+  // Calculate mood
+  const mood = useMemo(() => 
+    calculateMood(messages, lastInteraction, moodEnabled), 
+    [messages, lastInteraction, moodEnabled]
+  );
+
+  // --- ENHANCED: Keyboard shortcuts ---
+  useEffect(() => {
+    const handleShortcut = (action: ShortcutAction) => {
+      switch (action) {
+        case 'focus_input':
+          inputRef.current?.focus();
+          break;
+        case 'clear_chat':
+          onClear();
+          break;
+        case 'export_txt':
+          handleExport('txt');
+          break;
+        case 'export_json':
+          handleExport('json');
+          break;
+        case 'toggle_settings':
+          setShowSettings(prev => !prev);
+          break;
+      }
+    };
+
+    return setupKeyboardShortcuts(handleShortcut);
+  }, [messages, styleName]);
+
+  // --- ENHANCED: Show mood greeting when returning after long time ---
+  useEffect(() => {
+    const hoursSinceLastChat = (Date.now() - lastInteraction) / (1000 * 60 * 60);
+    
+    if (hoursSinceLastChat > 6 && moodEnabled && messages.length > 1) {
+      const greeting = getMoodGreeting(mood.level, styleName);
+      const lastMsg = messages[messages.length - 1];
+      
+      // Only add greeting if last message wasn't from Linda
+      if (lastMsg.role !== 'assistant') {
+        setMessages(prev => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: greeting
+          }
+        ]);
+      }
+    }
+  }, []); // Run once on mount
 
 
   // --- FUNGSI BARU: Konversi File ke Base64 ---
@@ -115,6 +184,26 @@ export default function App() {
     });
   }, [messages, typing]);
 
+  // --- ENHANCED: Export functions ---
+  function handleExport(format: 'txt' | 'json') {
+    if (messages.length <= 1) {
+      alert('Belum ada chat yang bisa di-export!');
+      return;
+    }
+    
+    if (format === 'txt') {
+      exportChatAsText(messages, styleName);
+    } else {
+      exportChatAsJSON(messages, styleName);
+    }
+  }
+
+  // --- ENHANCED: Retry function for errors ---
+  function handleRetry() {
+    setError(null);
+    onSend();
+  }
+
   // kirim pesan
   async function onSend() {
     const text = input.trim();
@@ -123,6 +212,10 @@ export default function App() {
     setInput("");
     setSending(true);
     setTyping(true);
+    setError(null); // Clear any previous errors
+
+    // Update last interaction time
+    setLastInteraction(Date.now());
 
     // --- PERBAIKAN: HAPUS PREVIEW SEGERA (OPTIMISTIC UI) ---
     // Simpan data gambar saat ini untuk pesan user
@@ -163,6 +256,21 @@ export default function App() {
             image_base64: currentImageBase64 // Gunakan Base64 yang disimpan
         }),
       });
+
+      // --- ENHANCED: Better error handling ---
+      if (!res.ok) {
+        const errorInfo = parseError(null, res);
+        const lindaResponse = getLindasErrorResponse(errorInfo, styleName);
+        
+        setMessages((m) => [
+          ...m,
+          { id: crypto.randomUUID(), role: "assistant", content: lindaResponse },
+        ]);
+        setError(errorInfo);
+        setTyping(false);
+        setSending(false);
+        return;
+      }
 
       if (res.ok && res.body) {
         const id = crypto.randomUUID();
@@ -209,8 +317,19 @@ export default function App() {
         if (finalText.trim()) await updateEmotion(finalText.trim(), persona, setAvatar);
         return;
       }
-    } catch {
-      // lanjut ke fallback JSON
+    } catch (err) {
+      // --- ENHANCED: Better error handling for network errors ---
+      const errorInfo = parseError(err);
+      const lindaResponse = getLindasErrorResponse(errorInfo, styleName);
+      
+      setMessages((m) => [
+        ...m,
+        { id: crypto.randomUUID(), role: "assistant", content: lindaResponse },
+      ]);
+      setError(errorInfo);
+      setTyping(false);
+      setSending(false);
+      return;
     }
 
     // fallback JSON (non-SSE)
@@ -236,11 +355,16 @@ export default function App() {
         { id: crypto.randomUUID(), role: "assistant", content: reply },
       ]);
       if (reply) await updateEmotion(reply, persona, setAvatar);
-    } catch {
+    } catch (err) {
+      // --- ENHANCED: Better error handling for fallback ---
+      const errorInfo = parseError(err);
+      const lindaResponse = getLindasErrorResponse(errorInfo, styleName);
+      
       setMessages((m) => [
         ...m,
-        { id: crypto.randomUUID(), role: "assistant", content: "Koneksi gagal. Coba lagi." },
+        { id: crypto.randomUUID(), role: "assistant", content: lindaResponse },
       ]);
+      setError(errorInfo);
     } finally {
       setTyping(false);
       setSending(false);
@@ -255,6 +379,10 @@ export default function App() {
   }
 
   async function onClear() {
+    if (!confirm('Yakin mau hapus semua chat? Histori akan hilang!')) {
+      return;
+    }
+
     setMessages([
         { id: crypto.randomUUID(), role: "assistant", content: "Halo! Aku siap bantu. Tulis pesanmu di bawah." },
     ]); 
@@ -268,11 +396,11 @@ export default function App() {
     setImageBase64(null); 
     setImagePreviewUrl(null); 
     if(fileInputRef.current) fileInputRef.current.value = '';
+    setError(null);
+    setLastInteraction(Date.now());
 
     setTimeout(() => {
-      document
-        .querySelector<HTMLTextAreaElement>("textarea.textarea")
-        ?.focus();
+      inputRef.current?.focus();
     }, 0);
   }
 
@@ -282,6 +410,29 @@ export default function App() {
         <div className="brand">
           <span className="brand-dot" />
           Linda AI
+        </div>
+        <div className="header-actions">
+          <button 
+            className="icon-btn" 
+            onClick={() => setShowStats(!showStats)}
+            title="Statistik"
+          >
+            📊
+          </button>
+          <button 
+            className="icon-btn" 
+            onClick={() => handleExport('txt')}
+            title="Export Chat (Ctrl+E)"
+          >
+            💾
+          </button>
+          <button 
+            className="icon-btn" 
+            onClick={() => setShowSettings(!showSettings)}
+            title="Settings (Ctrl+,)"
+          >
+            ⚙️
+          </button>
         </div>
       </header>
 
@@ -295,6 +446,9 @@ export default function App() {
             </div>
           </div>
 
+          {/* --- ENHANCED: Mood Indicator --- */}
+          <MoodIndicator moodLevel={mood.level} enabled={moodEnabled} />
+
           <div className="control">
             <label className="label">Gaya bicara</label>
             <select
@@ -303,17 +457,38 @@ export default function App() {
               onChange={(e) => setStyleName(e.target.value)}
             >
               <option>Tsundere</option>
-              {/* --- PERUBAHAN 3: MENAMBAHKAN YANDERE --- */}
               <option>Yandere</option>
               <option>Ceria</option>
               <option>Santai</option>
               <option>Formal</option>
               <option>Netral</option>
             </select>
-            <button className="pill" onClick={onClear}>
-              Clear Chat
-            </button>
+            
+            <div className="button-group">
+              <button className="pill" onClick={onClear}>
+                🗑️ Clear Chat
+              </button>
+              <button 
+                className="pill pill-secondary" 
+                onClick={() => handleExport('json')}
+                title="Export as JSON"
+              >
+                📥 Export
+              </button>
+            </div>
           </div>
+
+          {/* --- ENHANCED: Settings Panel --- */}
+          {showSettings && (
+            <SettingsPanel 
+              moodEnabled={moodEnabled}
+              onMoodToggle={setMoodEnabled}
+              showShortcuts={true}
+            />
+          )}
+
+          {/* --- ENHANCED: Chat Stats --- */}
+          {showStats && <ChatStats messages={messages} />}
         </aside>
 
         <section className="chat">
@@ -322,6 +497,15 @@ export default function App() {
               Obrolan
             </h3>
           </div>
+
+          {/* --- ENHANCED: Error Message Display --- */}
+          {error && (
+            <ErrorMessage 
+              error={error}
+              onRetry={handleRetry}
+              onDismiss={() => setError(null)}
+            />
+          )}
 
           <Chat refDiv={listRef} messages={messages} typing={typing} />
 
@@ -356,8 +540,9 @@ export default function App() {
               </label>
               
               <textarea
+                ref={inputRef}
                 className="textarea"
-                placeholder="Tulis pesanmu…"
+                placeholder="Tulis pesanmu… (Shift+Enter untuk baris baru)"
                 value={input}
                 rows={1}
                 onChange={(e) => {
