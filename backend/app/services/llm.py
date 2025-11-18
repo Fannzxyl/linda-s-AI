@@ -1,3 +1,5 @@
+# backend/app/services/llm.py (FIX FINAL FOR 400 BAD REQUEST)
+
 import httpx
 import json
 import logging
@@ -15,18 +17,17 @@ logger = logging.getLogger(__name__)
 _CONNECTED_FLAG = False
 
 # --- KONFIGURASI KEAMANAN (Google API Safety Harms) ---
-# Menggunakan nilai INT yang setara dengan HarmBlockThreshold
 BLOCK_THRESHOLD = 2 # Blokir Medium (2) atau lebih tinggi
 
 SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": BLOCK_THRESHOLD},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": BLOCK_THRESHOLD},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": BLOCK_THRESHOLD},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": BLOCK_THRESHOLD},
+    {"category": f"HARM_CATEGORY_{category}", "threshold": BLOCK_THRESHOLD}
+    for category in ["HARASSMENT", "HATE_SPEECH", "SEXUALLY_EXPLICIT", "DANGEROUS_CONTENT"]
 ]
+HARM_CATEGORIES = {c: c for c in ["HARASSMENT", "HATE_SPEECH", "SEXUALLY_EXPLICIT", "DANGEROUS_CONTENT"]}
 
 
 def _build_image_part_dict(image_base64: str) -> Optional[Dict[str, Any]]:
+    # Logika untuk konversi base64 ke format Gemini API (parts)
     if "," in image_base64:
         header, encoded = image_base64.split(",", 1)
         mime_type = header.split(":")[1].split(";")[0]
@@ -35,59 +36,49 @@ def _build_image_part_dict(image_base64: str) -> Optional[Dict[str, Any]]:
         mime_type = "image/jpeg"
     try:
         image_bytes = base64.b64decode(encoded)
-        Image.open(io.BytesIO(image_bytes))
+        Image.open(io.BytesIO(image_bytes)) # Memastikan gambar valid
         return {"inlineData": {"data": encoded, "mimeType": mime_type}}
     except Exception as e:
         logger.error("Gagal memproses gambar Base64: %s", e)
         return None
 
-def prepare_system_prompt(
-    persona_default: str, persona_override: str | None = None, memory_snippet: str | None = None
-) -> str:
-    persona = (persona_override or persona_default).strip()
-    parts = [persona]
-    if memory_snippet:
-        parts.append(
-            "Catatan konteks dari obrolan sebelumnya: " + memory_snippet.strip() +
-            "\nGunakan konteks ini secara natural dalam percakapan, jangan sebutkan sebagai daftar memori."
-        )
-    return "\n\n".join(parts)
-
+# PERBAIKAN UTAMA DI FUNGSI INI
 def _build_payload(
     messages: List[Message], system_prompt: str, image_base64: Optional[str] = None
 ) -> Dict:
+    """Membangun payload JSON untuk Gemini API."""
     image_part = _build_image_part_dict(image_base64) if image_base64 else None
+    
+    # 1. Bangun Contents (History + Pesan Baru)
     contents: List[Dict[str, object]] = []
-    last_user_content_index = -1
-    for i in reversed(range(len(messages))):
-        if messages[i].role == "user":
-            last_user_content_index = i
-            break
-    for i, message in enumerate(messages):
+    
+    # Kumpulkan semua pesan history
+    for message in messages:
         if message.role == "system": continue
         role = "user" if message.role == "user" else "model"
         parts: List[Dict[str, str] | Dict[str, Any]] = [{"text": message.content}]
-        if i == last_user_content_index and image_part:
-            parts.insert(0, image_part)
         contents.append({"role": role, "parts": parts})
 
-    # Konversi threshold int menjadi string yang diterima oleh API
-    safety_settings = [
-        {"category": f"HARM_CATEGORY_{category}", "threshold": str(BLOCK_THRESHOLD)}
-        for category in HARM_CATEGORIES.keys()
+    # 2. Sisipkan gambar ke pesan user terakhir (jika ada)
+    if contents and contents[-1]["role"] == "user" and image_part:
+        contents[-1]["parts"].insert(0, image_part)
+
+    # 3. Siapkan Konfigurasi
+    safety_settings_payload = [
+        {"category": f"HARM_CATEGORY_{c}", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
+        for c in ["HARASSMENT", "HATE_SPEECH", "SEXUALLY_EXPLICIT", "DANGEROUS_CONTENT"]
     ]
 
     return {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
         "config": {
+            "systemInstruction": system_prompt, # Menggunakan systemInstruction di level config
             "temperature": 0.65, 
             "topP": 0.9, 
             "topK": 32,
             "maxOutputTokens": 600, 
-            "responseMimeType": "text/plain",
         },
-        "safetySettings": safety_settings,
+        "safetySettings": safety_settings_payload,
     }
 
 
@@ -108,25 +99,25 @@ async def call_gemini_stream(
 
     model = settings.gemini_model.strip()
     
-    # --- PERBAIKAN URL UNTUK CHAT STREAMING ---
+    # Bangun URL yang pasti benar untuk stream
     base_url = settings.gemini_base_url.strip() if settings.gemini_base_url else \
         "https://generativelanguage.googleapis.com/v1beta/models"
 
-    # Pastikan base_url bersih dari '/models' agar tidak terjadi double pathing
     if base_url.endswith("/models"):
          base_url = base_url.rstrip("/models") 
     
-    # URL CHAT STREAMING yang pasti benar
     url = f"{base_url}/models/{model}:streamGenerateContent"
-    # ----------------------------------------
     
+    # Payload DIBUAT DI SINI
     payload = _build_payload(messages, system_prompt, image_base64)
+    
+    # ... (SISA LOGIKA RETRY DAN ERROR HANDLING TETAP SAMA) ...
     
     candidate_models = [model]
     last_error: Exception | None = None
-
-    for current_model in candidate_models:
-        url = f"{base_url}/models/{current_model}:streamGenerateContent" # <-- HARUS DIUPDATE DI SINI JUGA
+    
+    for current_model in candidate_models: # Loop hanya sekali
+        url = f"{base_url}/models/{current_model}:streamGenerateContent" 
         
         params = {"key": final_api_key, "alt": "sse"}
 
@@ -139,13 +130,10 @@ async def call_gemini_stream(
                     async with client.stream("POST", url, params=params, json=payload) as response:
                         
                         if response.status_code == 401:
-                            raise httpx.HTTPStatusError(
-                                "API Key tidak valid atau ditolak.",
-                                request=response.request,
-                                response=response,
-                            )
+                            raise httpx.HTTPStatusError("API Key tidak valid atau ditolak.", request=response.request, response=response)
                         
-                        response.raise_for_status()
+                        # Cek response code lainnya (termasuk 400 Bad Request)
+                        response.raise_for_status() 
                         
                         aggregated_raw = ""
                         first_chunk = True
@@ -179,8 +167,7 @@ async def call_gemini_stream(
                 last_error = exc
                 logger.warning("Gemini request error: %s", exc)
 
-            if attempt > settings.max_retries:
-                break
+            if attempt > settings.max_retries: break
             
             sleep_for = backoff**attempt
             await asyncio.sleep(sleep_for)
@@ -190,16 +177,16 @@ async def call_gemini_stream(
         status = last_error.response.status_code
         
     message = (
-        f"Gemini API failed after trying model '{model}' ({settings.max_retries + 1} attempts). "
+        f"Gemini API failed after trying model '{model}' (4 attempts). "
         f"Last status: {status if status is not None else 'unavailable'}. "
-        "CEK: 1. Nama model di .env. 2. Kunci API Anda. 3. Billing Akun Google Cloud."
+        "CEK: 1. Nama model. 2. Kunci API Anda (sudah divalidasi, tapi mungkin diblokir untuk generateContent)."
     )
     # Reruntukan error agar ditangkap oleh error handler di main.py
     raise RuntimeError(message) from last_error
 
 
 async def _read_sse_payloads(response: httpx.Response) -> AsyncGenerator[str, None]:
-    # ... (unchanged helper code for SSE reading) ...
+    # ... (Unchanged helper functions remain below) ...
     buffer = []
     async for raw_line in response.aiter_lines():
         if raw_line.startswith(":") or raw_line.startswith("event"): continue
@@ -260,6 +247,7 @@ def _extract_text(line: str) -> List[str]:
     return chunks
 
 def summarize_for_memory(user_text: str) -> Tuple[str, str]:
+    # Placeholder for summarization logic
     normalized = " ".join(user_text.split())
     lower_text = normalized.lower()
     if any(keyword in lower_text for keyword in ("todo", "kerjakan", "ingat untuk", "harus")):
