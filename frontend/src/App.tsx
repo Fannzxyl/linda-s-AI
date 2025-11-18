@@ -1,7 +1,8 @@
-// src/App.tsx (FINAL ONLINE VERSION FIXED - 422 RESOLVED)
+// src/App.tsx (FINAL ONLINE VERSION)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
+// Import Avatar PNG (Sesuai keinginanmu)
 import Avatar, { AvatarState, Emotion } from "./components/Avatar";
 import Chat, { Msg } from "./components/Chat";
 import ErrorMessage from "./components/ErrorMessage";
@@ -14,8 +15,10 @@ import { calculateMood, getMoodGreeting } from "./utils/moodSystem";
 import { parseError, getLindasErrorResponse } from "./utils/errorHandler";
 import { setupKeyboardShortcuts, ShortcutAction } from "./utils/keyboardShortcuts";
 
-/* --- ENDPOINT HUGGING FACE (ONLINE) --- */
+/* --- PERBAIKAN LINK KE HUGGING FACE --- */
 const BASE_URL = "https://fanlley-alfan.hf.space";
+
+// Di backend Python kamu, endpoint chat ada di root (/chat), bukan (/api/chat)
 const CHAT_URL = `${BASE_URL}/chat`;
 const RESET_URL = `${BASE_URL}/reset`;
 const EMOTION_URL = `${BASE_URL}/emotion`;
@@ -171,27 +174,11 @@ export default function App() {
     setImageBase64(null); setImagePreviewUrl(null); 
     if(fileInputRef.current) fileInputRef.current.value = ''; 
     
-    // 1. BUAT MSG DENGAN ID UNTUK FRONTEND DISPLAY (TS-COMPLIANT)
-    const newUserMsgId = crypto.randomUUID();
-    const userMsg: Msg = { 
-        id: newUserMsgId, 
-        role: "user", 
-        content: text || "(Gambar)", 
-        image_url: currentImagePreviewUrl
-    };
-    const updatedMessages = [...messages, userMsg]; 
+    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: text || "(Gambar)", image_url: currentImagePreviewUrl };
+    const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
 
-    // 2. BUAT HISTORY UNTUK PYDANTIC (HAPUS ID, KIRIM STRUCTURE SAMA)
-    const history = updatedMessages
-      .filter((x) => x.role !== "system")
-      .map((msg) => ({ // Menggunakan destructuring sederhana untuk mendapatkan field yang bersih
-          role: msg.role, 
-          content: msg.content, 
-          image_url: msg.image_url || null // Pastikan null jika kosong
-      })); 
-    // -------------------------------------------------------------
-    
+    const history = updatedMessages.filter((x) => x.role !== "system").map(({ role, content }) => ({ role, content })); 
     let finalText = "";
     try {
       const headers = { "Content-Type": "application/json", "Accept": "text/event-stream", "X-Gemini-Api-Key": apiKey };
@@ -208,22 +195,16 @@ export default function App() {
       }
       if (res.ok && res.body) {
         const id = crypto.randomUUID();
-        // Gunakan ID unik untuk pesan balasan asisten
-        setMessages((m) => [...m, { id, role: "assistant", content: "" }]); 
-        
+        setMessages((m) => [...m, { id, role: "assistant", content: "" }]);
         const reader = res.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
-        const assistantMsgId = id; 
-
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
-
           const blocks = buffer.split("\n\n");
           buffer = blocks.pop() || "";
-
           for (const blk of blocks) {
             let eventType = "message";
             const dataLines: string[] = [];
@@ -236,7 +217,7 @@ export default function App() {
             if (!data) continue;
             if (eventType === "token") {
               finalText += data;
-              setMessages((m) => m.map((msg) => msg.id === assistantMsgId ? { ...msg, content: (msg.content || "") + data } : msg));
+              setMessages((m) => m.map((msg) => msg.id === id ? { ...msg, content: (msg.content || "") + data } : msg));
             }
           }
         }
@@ -281,6 +262,7 @@ export default function App() {
           <div className="avatar-card">
             <div className="avatar-glow" />
             <div className="avatar-canvas">
+              {/* AVATAR PNG BIASA */}
               <Avatar state={avatar} typing={typing} />
             </div>
           </div>
