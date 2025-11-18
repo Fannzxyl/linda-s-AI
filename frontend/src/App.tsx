@@ -1,4 +1,4 @@
-// C:\Alfan\linda-s-AI\frontend\src\App.tsx (ENHANCED VERSION WITH API KEY MODAL)
+// C:\Alfan\linda-s-AI\frontend\src\App.tsx (ONLINE VERSION)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
@@ -8,16 +8,19 @@ import ErrorMessage from "./components/ErrorMessage";
 import SettingsPanel from "./components/SettingsPanel";
 import MoodIndicator from "./components/MoodIndicator";
 import ChatStats from "./components/ChatStats";
-import ApiKeyModal from "./components/ApiKeyModal"; // <-- 1. IMPORT MODAL
+import ApiKeyModal from "./components/ApiKeyModal"; 
 import { exportChatAsText, exportChatAsJSON } from "./utils/chatExport";
 import { calculateMood, getMoodGreeting } from "./utils/moodSystem";
 import { parseError, getLindasErrorResponse } from "./utils/errorHandler";
 import { setupKeyboardShortcuts, ShortcutAction } from "./utils/keyboardShortcuts";
 
-/* ENDPOINT (samakan dengan proxy vite) */
-const CHAT_URL = "/api/chat";
-const RESET_URL = "/api/reset";
-const EMOTION_URL = "/api/emotion";
+/* --- ENDPOINT HUGGING FACE (SUDAH DIPERBAIKI) --- */
+const BASE_URL = "https://fanlley-alfan.hf.space";
+
+// Perhatikan: Di backend Python kamu, endpoint chat/reset/emotion ada di root (bukan /api/...)
+const CHAT_URL = `${BASE_URL}/chat`;
+const RESET_URL = `${BASE_URL}/reset`;
+const EMOTION_URL = `${BASE_URL}/emotion`;
 
 /* UTIL */
 function useLocalStorage<T>(key: string, initial: T) {
@@ -131,7 +134,7 @@ export default function App() {
     };
 
     return setupKeyboardShortcuts(handleShortcut);
-  }, [messages, styleName, apiKey]); // Added apiKey to dependencies
+  }, [messages, styleName, apiKey]);
 
   useEffect(() => {
     const hoursSinceLastChat = (Date.now() - lastInteraction) / (1000 * 60 * 60);
@@ -156,7 +159,6 @@ export default function App() {
   const handleSaveApiKey = (key: string) => {
     setApiKey(key);
     setIsApiKeyModalOpen(false);
-    // Focus input after saving key
     setTimeout(() => inputRef.current?.focus(), 100);
   };
 
@@ -261,18 +263,17 @@ export default function App() {
         headers,
         body: JSON.stringify({ 
             messages: history, 
-            persona: styleName,
+            persona: styleName, 
             image_base64: currentImageBase64
         }),
       });
 
       if (!res.ok) {
         const errorInfo = parseError(null, res);
-        // Special handling for 401 Unauthorized (likely bad API key)
         if (res.status === 401) {
           errorInfo.message = "API Key tidak valid atau ditolak. Silakan periksa kembali.";
-          setApiKey(null); // Clear the bad key
-          setIsApiKeyModalOpen(true); // Re-open the modal
+          setApiKey(null); 
+          setIsApiKeyModalOpen(true); 
         }
         const lindaResponse = getLindasErrorResponse(errorInfo, styleName);
         
@@ -597,13 +598,13 @@ async function updateEmotion(
   setAvatar: Dispatch<SetStateAction<AvatarState>>,
   apiKey: string | null // <-- Pass API key
 ) {
-  if (!apiKey) return; // Don't run if no key
+  if (!apiKey) return; 
   try {
     const res = await fetch(EMOTION_URL, {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
-        "X-Gemini-Api-Key": apiKey, // <-- Add API key to header
+        "X-Gemini-Api-Key": apiKey,
       },
       body: JSON.stringify({ text, persona }),
     });

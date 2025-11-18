@@ -1,12 +1,15 @@
-# backend/app/config.py (Kode FINAL yang Diperbaiki)
 import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
+import logging
 
 from dotenv import load_dotenv, dotenv_values
 
-# Asumsi lokasi BASE_DIR: C:\Alfan\linda-s-AI\backend
+# Kita tambahkan Logger biar kelihatan di logs kalau ada apa-apa
+logger = logging.getLogger(__name__)
+
+# Asumsi lokasi BASE_DIR: /code/app (di dalam Docker Hugging Face)
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = BASE_DIR / ".env"
 
@@ -39,13 +42,14 @@ class Settings:
     def __init__(self) -> None:
         # Pemuatan Variabel dari Environment atau .env
         self.gemini_api_key: str = _read_env("GEMINI_API_KEY") or ""
-        self.gemini_model: str = _read_env("GEMINI_MODEL") or "gemini-2.5-flash"
         
-        # PERBAIKAN KRUSIAL: Menambahkan '/models' ke BASE_URL.
-        # Ini memperbaiki error 404 Not Found.
+        # --- PENTING: Pakai 1.5 karena 2.5 BELUM RILIS ---
+        self.gemini_model: str = _read_env("GEMINI_MODEL") or "gemini-1.5-flash"
+        
+        # URL API Google yang benar
         self.gemini_base_url: str = _read_env(
             "GEMINI_BASE_URL",
-            "https://generativelanguage.googleapis.com/v1beta/models", # <-- PATH SUDAH BENAR
+            "https://generativelanguage.googleapis.com/v1beta/models", 
         ) or "https://generativelanguage.googleapis.com/v1beta/models"
         
         # Angka
@@ -53,18 +57,18 @@ class Settings:
         self.max_retries: int = int(_read_env("MAX_RETRIES", "3"))
         self.backoff_factor: float = float(_read_env("BACKOFF_FACTOR", "1.6"))
         
-        # Path DB
+        # --- PATH DATABASE (PENTING BUAT DOCKER) ---
+        # Kita arahkan ke /code/memory.db biar server bisa tulis
         self.memory_db_path: Path = Path(
-            _read_env("MEMORY_DB_PATH", str(BASE_DIR / "memory.db"))
+            _read_env("MEMORY_DB_PATH", "/code/memory.db")
         )
 
-        # Validasi krusial
+        # --- VALIDASI DIMATIKAN (SOLUSI ERROR) ---
+        # Jangan crash kalau API Key kosong. 
+        # Kita akan terima key dari Frontend nanti.
         if not self.gemini_api_key:
-            raise RuntimeError("GEMINI_API_KEY kosong. Aplikasi TIDAK DAPAT terhubung ke Gemini.")
-        
-        # Baris ini tidak lagi diperlukan karena BASE_URL sudah benar
-        # if self.gemini_base_url.endswith("/"):
-        #     self.gemini_base_url = self.gemini_base_url.rstrip("/")
+            logger.warning("⚠️ Server berjalan tanpa API Key ENV. Menunggu Key dari Frontend.")
+            # raise RuntimeError dihapus biar server tetap nyala
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
