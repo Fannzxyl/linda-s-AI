@@ -14,7 +14,7 @@ import { calculateMood, getMoodGreeting } from "./utils/moodSystem";
 import { parseError, getLindasErrorResponse } from "./utils/errorHandler";
 import { setupKeyboardShortcuts, ShortcutAction } from "./utils/keyboardShortcuts";
 
-/* --- ENDPOINT HUGGING FACE (FINAL FIX) --- */
+/* --- ENDPOINT HUGGING FACE (ONLINE) --- */
 const BASE_URL = "https://fanlley-alfan.hf.space";
 const CHAT_URL = `${BASE_URL}/chat`;
 const RESET_URL = `${BASE_URL}/reset`;
@@ -171,20 +171,26 @@ export default function App() {
     setImageBase64(null); setImagePreviewUrl(null); 
     if(fileInputRef.current) fileInputRef.current.value = ''; 
     
-    // FIX: Hapus ID dari object yang dikirim, karena ID tidak ada di Pydantic
+    // --- FIX TS2741 ERROR: KEMBALIKAN ID UNTUK FRONTEND TYPE 'Msg' ---
+    const newUserMsgId = crypto.randomUUID();
     const userMsg: Msg = { 
+        id: newUserMsgId, // <-- WAJIB ADA DI FRONTEND
         role: "user", 
         content: text || "(Gambar)", 
-        image_url: currentImagePreviewUrl 
+        image_url: currentImagePreviewUrl
     };
-    // Tambahkan ID hanya untuk display di frontend
-    const updatedMessages = [...messages, { ...userMsg, id: crypto.randomUUID() }]; 
+    // Tambahkan pesan user yang lengkap (dengan ID) ke riwayat untuk display
+    const updatedMessages = [...messages, userMsg]; 
     setMessages(updatedMessages);
 
-    // --- FIX 422 BUG: HARUS MENYERTAKAN image_url di mapping ---
+    // --- FIX 422 BUG: Map History ke Format Pydantic (HAPUS ID) ---
     const history = updatedMessages
       .filter((x) => x.role !== "system")
-      .map(({ role, content, image_url }) => ({ role, content, image_url: image_url || null })); // Tambahkan image_url (null jika kosong)
+      .map(({ role, content, image_url }) => ({ 
+          role, 
+          content, 
+          image_url: image_url || null // Pastikan image_url (null jika kosong) dikirim ke Pydantic
+      }));
     // -------------------------------------------------------------
     
     let finalText = "";
