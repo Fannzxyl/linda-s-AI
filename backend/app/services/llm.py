@@ -1,14 +1,15 @@
-# backend/app/services/llm.py
+# backend/app/services/llm.py (VERSI FINAL DENGAN LOGIKA MODEL YANG BENAR)
 
-import httpx
+import asyncio
 import json
 import logging
 import re
 import base64
-import io
-from PIL import Image
+from io import BytesIO
 from typing import AsyncGenerator, Dict, List, Tuple, Optional, Any
-import asyncio
+
+import httpx
+from PIL import Image
 
 from ..config import get_settings
 from ..schemas import Message
@@ -16,18 +17,7 @@ from ..schemas import Message
 logger = logging.getLogger(__name__)
 _CONNECTED_FLAG = False
 
-# --- CONSTANTS UNTUK SAFETY SETTINGS (LEVEL 2) ---
-HARM_CATEGORIES = {
-    "HARASSMENT": "HARASSMENT",
-    "HATE_SPEECH": "HATE_SPEECH",
-    "SEXUALLY_EXPLICIT": "SEXUALLY_EXPLICIT",
-    "DANGEROUS_CONTENT": "DANGEROUS_CONTENT",
-}
-# Ambang batas pemblokiran: BLOCK_MEDIUM_AND_ABOVE adalah string yang dibutuhkan
-BLOCK_THRESHOLD_STRING = "BLOCK_MEDIUM_AND_ABOVE"
-# ----------------------------------------------------------------
-
-
+# ... (semua fungsi helper dari _build_image_part_dict hingga _build_payload tetap sama) ...
 def _build_image_part_dict(image_base64: str) -> Optional[Dict[str, Any]]:
     if "," in image_base64:
         header, encoded = image_base64.split(",", 1)
@@ -37,52 +27,50 @@ def _build_image_part_dict(image_base64: str) -> Optional[Dict[str, Any]]:
         mime_type = "image/jpeg"
     try:
         image_bytes = base64.b64decode(encoded)
-        Image.open(io.BytesIO(image_bytes)) 
+        Image.open(BytesIO(image_bytes))
         return {"inlineData": {"data": encoded, "mimeType": mime_type}}
     except Exception as e:
         logger.error("Gagal memproses gambar Base64: %s", e)
         return None
 
-# Fungsi prepare_system_prompt dihapus dari sini karena sudah dipindahkan ke main.py
+def prepare_system_prompt(
+    persona_default: str, persona_override: str | None = None, memory_snippet: str | None = None
+) -> str:
+    persona = (persona_override or persona_default).strip()
+    parts = [persona]
+    if memory_snippet:
+        parts.append(
+            "Catatan konteks dari obrolan sebelumnya: " + memory_snippet.strip() +
+            "\nGunakan konteks ini secara natural dalam percakapan, jangan sebutkan sebagai daftar memori."
+        )
+    return "\n\n".join(parts)
 
 def _build_payload(
     messages: List[Message], system_prompt: str, image_base64: Optional[str] = None
 ) -> Dict:
-    """Membangun payload JSON untuk Gemini API."""
     image_part = _build_image_part_dict(image_base64) if image_base64 else None
-    
-    # 1. Bangun Contents (History + Pesan Baru)
     contents: List[Dict[str, object]] = []
-    
-    for message in messages:
+    last_user_content_index = -1
+    for i in reversed(range(len(messages))):
+        if messages[i].role == "user":
+            last_user_content_index = i
+            break
+    for i, message in enumerate(messages):
         if message.role == "system": continue
         role = "user" if message.role == "user" else "model"
         parts: List[Dict[str, str] | Dict[str, Any]] = [{"text": message.content}]
+        if i == last_user_content_index and image_part:
+            parts.insert(0, image_part)
         contents.append({"role": role, "parts": parts})
-
-    # 2. Sisipkan gambar ke pesan user terakhir (jika ada)
-    if contents and contents[-1]["role"] == "user" and image_part:
-        contents[-1]["parts"].insert(0, image_part)
-
-    # 3. Siapkan Safety Settings
-    safety_settings_payload = [
-        {"category": f"HARM_CATEGORY_{category}", "threshold": BLOCK_THRESHOLD_STRING}
-        for category in HARM_CATEGORIES.keys()
-    ]
-
-    # 4. Bangun Payload Akhir
     return {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
-        "config": {
-            # Menggunakan systemInstruction yang benar, dan ditempatkan di bawah config
-            "systemInstruction": system_prompt, 
-            "temperature": 0.65, 
-            "topP": 0.9, 
-            "topK": 32,
-            "maxOutputTokens": 600, 
+        "generationConfig": {
+            "temperature": 0.65, "topP": 0.9, "topK": 32,
+            "maxOutputTokens": 600, "responseMimeType": "text/plain",
         },
-        "safetySettings": safety_settings_payload,
     }
+# ... (akhir dari fungsi helper yang tidak berubah) ...
 
 
 async def call_gemini_stream(
@@ -91,33 +79,36 @@ async def call_gemini_stream(
     *,
     image_base64: Optional[str] = None,
     delay_seconds: float = 0.0,
-    api_key: Optional[str] = None,
+    api_key: Optional[str] = None,  # <-- Tambahkan parameter API Key
 ) -> AsyncGenerator[str, None]:
-    
+    """Stream response tokens from Gemini API and yield per chunk."""
+
     settings = get_settings()
 
+    # --- Tentukan API Key yang akan digunakan ---
     final_api_key = api_key or settings.gemini_api_key
     if not final_api_key:
         raise ValueError("GEMINI_API_KEY tidak ditemukan atau kosong. Key harus disediakan via .env atau header permintaan.")
 
+    # --- PERBAIKAN DARI ANDA: Menggunakan logika fallback model yang benar ---
     model = settings.gemini_model.strip()
-    
-    # --- PERBAIKAN URL UNTUK CHAT STREAMING (Anti-404) ---
-    # Memastikan base_url bersih dari /models
-    base_url = (settings.gemini_base_url.strip() if settings.gemini_base_url else 
-        "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+    if "1.5" in model:
+        model = "gemini-2.0-flash"
 
-    # URL Final yang BENAR: base_url + /models/ + model_name + :streamGenerateContent
-    url_template = f"{base_url}/models/{{current_model}}:streamGenerateContent"
-    # -----------------------------------------------------
-    
+    allowed_models = {"gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.0-pro"}
+    if model not in allowed_models:
+        model = "gemini-2.0-flash"
+
+    base_url = settings.gemini_base_url.strip() if settings.gemini_base_url else \
+        "https://generativelanguage.googleapis.com/v1beta/models"
+
     payload = _build_payload(messages, system_prompt, image_base64)
-    
     candidate_models = [model]
     last_error: Exception | None = None
 
     for current_model in candidate_models:
-        url = url_template.format(current_model=current_model) 
+        url = f"{base_url}/{current_model}:streamGenerateContent"
+        # --- Gunakan API Key yang sudah ditentukan ---
         params = {"key": final_api_key, "alt": "sse"}
 
         attempt = 0
@@ -127,11 +118,14 @@ async def call_gemini_stream(
             try:
                 async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
                     async with client.stream("POST", url, params=params, json=payload) as response:
-                        
+                        # --- PERBAIKAN: Tangani error 401 (Unauthorized) secara eksplisit ---
                         if response.status_code == 401:
-                            raise httpx.HTTPStatusError("API Key tidak valid atau ditolak.", request=response.request, response=response)
-                        
-                        response.raise_for_status() 
+                            raise httpx.HTTPStatusError(
+                                "API Key tidak valid atau ditolak.",
+                                request=response.request,
+                                response=response,
+                            )
+                        response.raise_for_status()
                         
                         aggregated_raw = ""
                         first_chunk = True
@@ -165,7 +159,8 @@ async def call_gemini_stream(
                 last_error = exc
                 logger.warning("Gemini request error: %s", exc)
 
-            if attempt > settings.max_retries: break
+            if attempt > settings.max_retries:
+                break
             
             sleep_for = backoff**attempt
             await asyncio.sleep(sleep_for)
@@ -175,11 +170,13 @@ async def call_gemini_stream(
         status = last_error.response.status_code
         
     message = (
-        f"Gemini API failed after trying model '{model}' ({settings.max_retries + 1} attempts). Last status: {status if status is not None else 'unavailable'}. CEK: 1. Nama model. 2. Kunci API Anda (sudah divalidasi, tapi mungkin diblokir untuk generateContent)."
+        f"Gemini API failed after trying model '{model}' ({settings.max_retries + 1} attempts). "
+        f"Last status: {status if status is not None else 'unavailable'}. "
+        "CEK: 1. Nama model di .env. 2. Kunci API Anda. 3. Billing Akun Google Cloud."
     )
     raise RuntimeError(message) from last_error
 
-
+# ... (sisa file dari _read_sse_payloads hingga akhir tetap sama) ...
 async def _read_sse_payloads(response: httpx.Response) -> AsyncGenerator[str, None]:
     buffer = []
     async for raw_line in response.aiter_lines():

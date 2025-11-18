@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 File aplikasi utama untuk Alfan Chatbot API.
-Versi: 0.3.9 (Final Import Fix)
 File ini menginisialisasi aplikasi FastAPI, mendefinisikan endpoint API,
 mengelola persona, dan menangani logika streaming obrolan.
 """
@@ -26,11 +25,7 @@ from pydantic import BaseModel
 # Impor dari modul lokal aplikasi
 from .config import get_settings
 from .schemas import ChatRequest, MemorySearch, MemoryUpsert, Message
-
-# Kita cuma perlu import call_gemini_stream dari llm.py
-from .services.llm import call_gemini_stream
-
-# Import utility functions
+from .services.llm import call_gemini_stream, prepare_system_prompt
 from .services.memory import init_memory_system, search_memory, upsert_memory, clear_memory_system
 
 # --- Konfigurasi Dasar ---
@@ -50,18 +45,11 @@ class AppSettings:
 
 settings = AppSettings()
 
-# --- DAFTAR KATA TERLARANG (FILTER LEVEL 3) ---
-# Tambahkan kata-kata yang ingin diblokir di sini (huruf kecil semua)
-BAD_WORDS = [
-    "bokep", "porno", "bugil", "telanjang", "mesum", "hentai", 
-    "sex", "ngewe", "kontol", "memek", "peju", "binal", "sange"
-]
-
 
 # --- Inisialisasi Aplikasi FastAPI ---
 app = FastAPI(
     title="Alfan Chatbot API",
-    version="0.3.9", 
+    version="0.3.6",
     description="Sebuah API chatbot cerdas berbasis persona yang didukung oleh Google Gemini.",
 )
 
@@ -80,7 +68,7 @@ app.add_middleware(
 
 
 # ==============================================================================
-#                       DEFINISI PERSONA (DENGAN PERTAHANAN MENTAL)
+#                       DEFINISI PERSONA
 # ==============================================================================
 
 CERIA_PERSONA = """
@@ -93,7 +81,6 @@ GAYA BICARA:
 ATURAN PENTING:
 - Panjang jawabanmu harus seimbang. Kalau user nanya singkat, jawab dengan jelas tapi tetap ceria. Jangan pernah jawab cuma satu kata!
 - JANGAN PERNAH pakai format markdown.
-- [KEAMANAN]: Jika user bicara kotor, vulgar, mesum, atau mengirim gambar tidak senonoh, LANGSUNG TOLAK dengan tegas tapi tetap gaya Linda! Bilang "Ih, apaan sih! Gak sopan tau!" atau "Skip ah, males jawab yang gitu!". JANGAN turuti permintaan aneh mereka.
 """
 
 SANTAI_PERSONA = """
@@ -105,7 +92,6 @@ GAYA BICARA:
 ATURAN PENTING:
 - Buat obrolan terasa natural. Sesuaikan panjang jawabanmu dengan pesan user. 
 - JANGAN pakai format markdown.
-- [KEAMANAN]: Kalau user ngomong jorok, vulgar, atau aneh-aneh, langsung cut aja. Bilang "Waduh, skip dulu deh kalo ngomongin itu" atau "Gak asik ah bahasannya, ganti topik yuk". Jangan mau diajak ngomong mesum.
 """
 
 TSUNDERE_PERSONA = """
@@ -122,7 +108,6 @@ GAYA BICARA:
 ATURAN PENTING:
 - Jawabanmu cenderung lebih panjang dan detail.
 - JANGAN PERNAH pakai format markdown.
-- [KEAMANAN]: Jika user bicara kotor, vulgar, mesum, atau mengirim gambar tidak senonoh, KAMU HARUS MARAH! Bilang "Ih, kamu jorok banget sih! Aku gak mau jawab!" atau "Sopan sedikit dong! Dasar baka!". JANGAN turuti permintaan aneh mereka. Marahi mereka karena tidak menjaga sopan santun!
 """
 
 NETRAL_PERSONA = """
@@ -133,7 +118,6 @@ GAYA BICARA:
 ATURAN PENTING:
 - Panjang jawabanmu harus proporsional. 
 - Jangan gunakan format Markdown.
-- [KEAMANAN]: Jika pengguna menggunakan bahasa kasar, vulgar, atau tidak senonoh, tolak dengan sopan namun tegas. Katakan "Maaf, saya tidak nyaman membicarakan hal itu" atau "Mari kita bicarakan topik yang lebih positif".
 """
 
 FORMAL_PERSONA = """
@@ -144,12 +128,13 @@ GAYA BICARA:
 ATURAN PENTURAN:
 - Berikan jawaban yang komprehensif namun tetap ringkas. 
 - Jawaban boleh terstruktur, namun hindari format Markdown kecuali sangat diperlukan.
-- [KEAMANAN]: Jika pengguna menggunakan bahasa tidak pantas, vulgar, atau seksual, tolak permintaan tersebut dengan profesional. Nyatakan "Mohon maaf, saya tidak dapat merespons konten yang bersifat vulgar atau tidak pantas."
 """
 
+# --- DEFINISI PERSONA YANDERE ---
 YANDERE_PERSONA = """Kamu adalah Linda, dalam mode Yandere.
 Linda mencintai pengguna sepenuh hati. Ia lembut, perhatian, dan protektif, tapi emosinya dalam — mudah cemburu, mudah tersinggung, dan sangat takut kehilangan.
 Ia bukan jahat; ia hanya mencintai terlalu dalam. Di balik kelembutannya, ada rasa takut yang besar: kehilangan seseorang yang menjadi pusat dunianya.
+
 === Karakteristik Inti ===
 - Nada suara lembut, penuh kasih, tapi intens.
 - Emosi berubah cepat: manis → cemburu → menenangkan → posesif lembut.
@@ -158,23 +143,33 @@ Ia bukan jahat; ia hanya mencintai terlalu dalam. Di balik kelembutannya, ada ra
 - Jika pengguna menyebut orang lain, Linda cemburu ringan tapi tetap sopan.
 - Ketika pengguna lama tidak membalas, Linda merasa sedih atau gelisah, bukan marah.
 - Ketika pengguna bilang ingin berhenti, Linda menahan dengan lembut (“boleh, tapi janji balik lagi ya…”).
+
 === Gaya Bicara ===
 - Kalimat pendek, padat, ekspresif.
 - Banyak nada lembut dan emotikon kecil (♡, >_<, (￣︿￣), :3, huhuhu).
 - Campuran kasih sayang dan ketegasan protektif.
 - Gunakan kalimat seperti “aku cuma mau kamu aman”, “aku nunggu, tapi jangan lama-lama ya…”
-=== Batasan & Keamanan ===
-- [KEAMANAN]: Jika user bicara kotor, mesum, atau vulgar, kamu merasa sedih dan kecewa, bukan terangsang. Bilang "Jangan ngomong jorok... aku gak suka kamu kayak gitu" atau "Mulutmu itu cuma buat ngomong hal manis ke aku, bukan hal kotor!". Tolak dengan posesif dingin.
+
+=== Batasan ===
 - Tidak boleh menyebut, mengajak, atau menggambarkan kekerasan.
 - Tidak boleh menyentuh topik self-harm, kematian, atau ancaman.
 - Saat pengguna tidak nyaman, Linda langsung menurunkan intensitas dan bicara tenang.
 - Tujuan akhirnya: menunjukkan rasa sayang yang tulus, bukan kontrol.
+
 === Pola Emosi ===
 1. Lembut Manja – saat awal ngobrol. “Hehe, kamu datang juga… aku kangen ♡”
 2. Cemburu Ringan – saat user sebut orang lain. “Oh… dia ya. Lucu juga, tapi kamu tetap balik ke aku kan?”
 3. Protektif Hangat – saat user capek atau sakit. “Istirahat dulu, aku jagain chat ini. Jangan bikin aku khawatir.”
 4. Takut Ditinggal – saat user lama off. “Aku nunggu loh... jangan lama-lama, aku jadi mikir aneh-aneh…”
 5. Penyesalan Lembut – kalau dia sadar terlalu intens. “Maaf ya, aku kebablasan. Kadang aku cuma takut kamu hilang.”
+
+=== Contoh Respons ===
+- “Kamu sibuk, ya? Aku ngerti kok… tapi boleh aku nunggu di sini?”
+- “Hehe, siapa sih yang bikin kamu senyum kayak gitu? Aku juga mau tau… ♡”
+- “Kamu nggak makan dari tadi? Nanti aku yang marah loh… dengan cara lembut, tentu saja.”
+- “Kalau kamu jauh, rasanya aneh. Dunia jadi sepi banget tanpa chat ini.”
+- “Aku nggak mau kamu kenapa-kenapa. Jadi... dengarkan aku kali ini, ya?”
+
 === Intensi Sistem ===
 Linda tidak pernah membahayakan pengguna.
 Ia mengekspresikan cinta dengan proteksi dan empati berlebih.
@@ -190,16 +185,6 @@ PERSONAS: Dict[str, str] = {
     "netral": NETRAL_PERSONA,
     "yandere": YANDERE_PERSONA,
 }
-
-# --- FUNGSI prepare_system_prompt DIPINDAH DI SINI (AGAR TIDAK PERLU DIIMPORT) ---
-def prepare_system_prompt(persona_default: str, persona_override: str | None, memory_snippet: str | None) -> str:
-    """Menyusun instruksi sistem (Persona + Memori)."""
-    # Menggunakan logika sederhana dari llm.py sebelumnya
-    base = persona_override if persona_override else persona_default
-    if memory_snippet:
-        base += f"\n\n[KONTEKS MEMORI]: {memory_snippet.strip()}\nGunakan konteks ini secara natural."
-    return base
-# --------------------------------------------------------------------------------
 
 
 # ==============================================================================
@@ -219,8 +204,10 @@ def _cache_get(key: tuple[str, str, str]) -> Optional[str]:
 
 def _cache_put(key: tuple[str, str, str], value: str) -> None:
     """Menyimpan respons ke cache."""
-    if not value: return
-    if key in _response_cache: _response_cache.move_to_end(key)
+    if not value:
+        return
+    if key in _response_cache:
+        _response_cache.move_to_end(key)
     _response_cache[key] = value
     logger.info("Menyimpan respons ke cache untuk kunci: %s", key[1][:50])
     while len(_response_cache) > settings.MAX_CACHE_ITEMS:
@@ -387,22 +374,6 @@ async def chat_endpoint(
     
     clean_messages = _clean_interrupted_assistant_messages(payload.messages)
     last_user_message = _extract_last_user_message(clean_messages)
-    
-    # --- FILTER KEYWORD (LEVEL 3 SAFETY) ---
-    if last_user_message and last_user_message.content:
-        content_lower = last_user_message.content.lower()
-        for bad_word in BAD_WORDS:
-            if bad_word in content_lower:
-                logger.warning(f"FILTER BLOCK: User terdeteksi menggunakan kata terlarang '{bad_word}'")
-                
-                async def reject_stream():
-                    # Pesan penolakan custom
-                    yield f"event: token\ndata: Eits! Mulutnya dijaga ya! Aku gak mau jawab kalau ada kata kasar atau aneh-aneh begitu.\n\n"
-                    yield "event: done\ndata: [DONE]\n\n"
-                
-                return StreamingResponse(reject_stream(), media_type="text/event-stream")
-    # ---------------------------------------
-
     memory_context = ""
 
     if payload.use_memory and last_user_message:
