@@ -1,5 +1,3 @@
-# backend/app/services/llm.py (FIX FINAL FOR 400 BAD REQUEST)
-
 import httpx
 import json
 import logging
@@ -16,18 +14,23 @@ from ..schemas import Message
 logger = logging.getLogger(__name__)
 _CONNECTED_FLAG = False
 
-# --- KONFIGURASI KEAMANAN (Google API Safety Harms) ---
+# --- PENTING: DEFINISI HARM_CATEGORIES (Fix NameError) ---
+HARM_CATEGORIES = {
+    "HARASSMENT": "HARASSMENT",
+    "HATE_SPEECH": "HATE_SPEECH",
+    "SEXUALLY_EXPLICIT": "SEXUALLY_EXPLICIT",
+    "DANGEROUS_CONTENT": "DANGEROUS_CONTENT",
+}
 BLOCK_THRESHOLD = 2 # Blokir Medium (2) atau lebih tinggi
 
 SAFETY_SETTINGS = [
     {"category": f"HARM_CATEGORY_{category}", "threshold": BLOCK_THRESHOLD}
-    for category in ["HARASSMENT", "HATE_SPEECH", "SEXUALLY_EXPLICIT", "DANGEROUS_CONTENT"]
+    for category in HARM_CATEGORIES.keys()
 ]
-HARM_CATEGORIES = {c: c for c in ["HARASSMENT", "HATE_SPEECH", "SEXUALLY_EXPLICIT", "DANGEROUS_CONTENT"]}
+# ----------------------------------------------------------------
 
 
 def _build_image_part_dict(image_base64: str) -> Optional[Dict[str, Any]]:
-    # Logika untuk konversi base64 ke format Gemini API (parts)
     if "," in image_base64:
         header, encoded = image_base64.split(",", 1)
         mime_type = header.split(":")[1].split(";")[0]
@@ -42,7 +45,6 @@ def _build_image_part_dict(image_base64: str) -> Optional[Dict[str, Any]]:
         logger.error("Gagal memproses gambar Base64: %s", e)
         return None
 
-# PERBAIKAN UTAMA DI FUNGSI INI
 def _build_payload(
     messages: List[Message], system_prompt: str, image_base64: Optional[str] = None
 ) -> Dict:
@@ -52,7 +54,6 @@ def _build_payload(
     # 1. Bangun Contents (History + Pesan Baru)
     contents: List[Dict[str, object]] = []
     
-    # Kumpulkan semua pesan history
     for message in messages:
         if message.role == "system": continue
         role = "user" if message.role == "user" else "model"
@@ -65,14 +66,14 @@ def _build_payload(
 
     # 3. Siapkan Konfigurasi
     safety_settings_payload = [
-        {"category": f"HARM_CATEGORY_{c}", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
-        for c in ["HARASSMENT", "HATE_SPEECH", "SEXUALLY_EXPLICIT", "DANGEROUS_CONTENT"]
+        {"category": f"HARM_CATEGORY_{category}", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
+        for category in HARM_CATEGORIES.keys()
     ]
 
     return {
         "contents": contents,
         "config": {
-            "systemInstruction": system_prompt, # Menggunakan systemInstruction di level config
+            "systemInstruction": system_prompt, # System Prompt ditempatkan di level config
             "temperature": 0.65, 
             "topP": 0.9, 
             "topK": 32,
@@ -99,7 +100,7 @@ async def call_gemini_stream(
 
     model = settings.gemini_model.strip()
     
-    # Bangun URL yang pasti benar untuk stream
+    # --- PERBAIKAN URL UNTUK CHAT STREAMING (Anti-404) ---
     base_url = settings.gemini_base_url.strip() if settings.gemini_base_url else \
         "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -107,18 +108,15 @@ async def call_gemini_stream(
          base_url = base_url.rstrip("/models") 
     
     url = f"{base_url}/models/{model}:streamGenerateContent"
+    # -----------------------------------------------------
     
-    # Payload DIBUAT DI SINI
     payload = _build_payload(messages, system_prompt, image_base64)
-    
-    # ... (SISA LOGIKA RETRY DAN ERROR HANDLING TETAP SAMA) ...
     
     candidate_models = [model]
     last_error: Exception | None = None
-    
+
     for current_model in candidate_models: # Loop hanya sekali
         url = f"{base_url}/models/{current_model}:streamGenerateContent" 
-        
         params = {"key": final_api_key, "alt": "sse"}
 
         attempt = 0
@@ -132,7 +130,7 @@ async def call_gemini_stream(
                         if response.status_code == 401:
                             raise httpx.HTTPStatusError("API Key tidak valid atau ditolak.", request=response.request, response=response)
                         
-                        # Cek response code lainnya (termasuk 400 Bad Request)
+                        # Menangkap 400 Bad Request
                         response.raise_for_status() 
                         
                         aggregated_raw = ""
@@ -181,12 +179,11 @@ async def call_gemini_stream(
         f"Last status: {status if status is not None else 'unavailable'}. "
         "CEK: 1. Nama model. 2. Kunci API Anda (sudah divalidasi, tapi mungkin diblokir untuk generateContent)."
     )
-    # Reruntukan error agar ditangkap oleh error handler di main.py
     raise RuntimeError(message) from last_error
 
 
 async def _read_sse_payloads(response: httpx.Response) -> AsyncGenerator[str, None]:
-    # ... (Unchanged helper functions remain below) ...
+    # ... (Helper code for SSE reading) ...
     buffer = []
     async for raw_line in response.aiter_lines():
         if raw_line.startswith(":") or raw_line.startswith("event"): continue
@@ -247,7 +244,6 @@ def _extract_text(line: str) -> List[str]:
     return chunks
 
 def summarize_for_memory(user_text: str) -> Tuple[str, str]:
-    # Placeholder for summarization logic
     normalized = " ".join(user_text.split())
     lower_text = normalized.lower()
     if any(keyword in lower_text for keyword in ("todo", "kerjakan", "ingat untuk", "harus")):

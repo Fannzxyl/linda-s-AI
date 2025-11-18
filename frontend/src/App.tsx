@@ -1,8 +1,7 @@
-// src/App.tsx (FINAL ONLINE VERSION)
+// src/App.tsx (FINAL ONLINE VERSION FIXED)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-// Import Avatar PNG (Sesuai keinginanmu)
 import Avatar, { AvatarState, Emotion } from "./components/Avatar";
 import Chat, { Msg } from "./components/Chat";
 import ErrorMessage from "./components/ErrorMessage";
@@ -15,10 +14,8 @@ import { calculateMood, getMoodGreeting } from "./utils/moodSystem";
 import { parseError, getLindasErrorResponse } from "./utils/errorHandler";
 import { setupKeyboardShortcuts, ShortcutAction } from "./utils/keyboardShortcuts";
 
-/* --- PERBAIKAN LINK KE HUGGING FACE --- */
+/* --- ENDPOINT HUGGING FACE (FINAL FIX) --- */
 const BASE_URL = "https://fanlley-alfan.hf.space";
-
-// Di backend Python kamu, endpoint chat ada di root (/chat), bukan (/api/chat)
 const CHAT_URL = `${BASE_URL}/chat`;
 const RESET_URL = `${BASE_URL}/reset`;
 const EMOTION_URL = `${BASE_URL}/emotion`;
@@ -174,11 +171,22 @@ export default function App() {
     setImageBase64(null); setImagePreviewUrl(null); 
     if(fileInputRef.current) fileInputRef.current.value = ''; 
     
-    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: text || "(Gambar)", image_url: currentImagePreviewUrl };
-    const updatedMessages = [...messages, userMsg];
+    // FIX: Hapus ID dari object yang dikirim, karena ID tidak ada di Pydantic
+    const userMsg: Msg = { 
+        role: "user", 
+        content: text || "(Gambar)", 
+        image_url: currentImagePreviewUrl 
+    };
+    // Tambahkan ID hanya untuk display di frontend
+    const updatedMessages = [...messages, { ...userMsg, id: crypto.randomUUID() }]; 
     setMessages(updatedMessages);
 
-    const history = updatedMessages.filter((x) => x.role !== "system").map(({ role, content }) => ({ role, content })); 
+    // --- FIX 422 BUG: HARUS MENYERTAKAN image_url di mapping ---
+    const history = updatedMessages
+      .filter((x) => x.role !== "system")
+      .map(({ role, content, image_url }) => ({ role, content, image_url: image_url || null })); // Tambahkan image_url (null jika kosong)
+    // -------------------------------------------------------------
+    
     let finalText = "";
     try {
       const headers = { "Content-Type": "application/json", "Accept": "text/event-stream", "X-Gemini-Api-Key": apiKey };
@@ -262,7 +270,6 @@ export default function App() {
           <div className="avatar-card">
             <div className="avatar-glow" />
             <div className="avatar-canvas">
-              {/* AVATAR PNG BIASA */}
               <Avatar state={avatar} typing={typing} />
             </div>
           </div>
