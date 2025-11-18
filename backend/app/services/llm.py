@@ -1,15 +1,12 @@
-# backend/app/services/llm.py (VERSI FINAL DENGAN SAFETY SETTINGS DAN LOGIKA MODEL YANG BENAR)
-
-import asyncio
+import httpx
 import json
 import logging
 import re
 import base64
-from io import BytesIO
-from typing import AsyncGenerator, Dict, List, Tuple, Optional, Any
-
-import httpx
+import io
 from PIL import Image
+from typing import AsyncGenerator, Dict, List, Tuple, Optional, Any
+import asyncio
 
 from ..config import get_settings
 from ..schemas import Message
@@ -17,22 +14,16 @@ from ..schemas import Message
 logger = logging.getLogger(__name__)
 _CONNECTED_FLAG = False
 
-# --- CONSTANTS UNTUK SAFETY SETTINGS (Google API Safety Harms) ---
-# Menggunakan nilai INT yang setara dengan HarmCategory dan HarmBlockThreshold
-HARM_CATEGORIES = {
-    "HARASSMENT": 1,
-    "HATE_SPEECH": 2,
-    "SEXUALLY_EXPLICIT": 3,
-    "DANGEROUS_CONTENT": 4,
-}
+# --- KONFIGURASI KEAMANAN (Google API Safety Harms) ---
+# Menggunakan nilai INT yang setara dengan HarmBlockThreshold
+BLOCK_THRESHOLD = 2 # Blokir Medium (2) atau lebih tinggi
 
-# BLOCK_NONE = 4 (Izinkan semua, tidak disarankan)
-# BLOCK_LOW_AND_ABOVE = 1 
-# BLOCK_MEDIUM_AND_ABOVE = 2 
-# BLOCK_ONLY_HIGH = 3 (Default Google)
-
-# KITA PERKETAT: Block konten yang terdeteksi Medium (2) atau lebih tinggi
-BLOCK_THRESHOLD = 2 
+SAFETY_SETTINGS = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": BLOCK_THRESHOLD},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": BLOCK_THRESHOLD},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": BLOCK_THRESHOLD},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": BLOCK_THRESHOLD},
+]
 
 
 def _build_image_part_dict(image_base64: str) -> Optional[Dict[str, Any]]:
@@ -43,9 +34,8 @@ def _build_image_part_dict(image_base64: str) -> Optional[Dict[str, Any]]:
         encoded = image_base64
         mime_type = "image/jpeg"
     try:
-        # Pengecekan PIL hanya untuk memastikan base64-nya valid gambar
         image_bytes = base64.b64decode(encoded)
-        Image.open(BytesIO(image_bytes))
+        Image.open(io.BytesIO(image_bytes))
         return {"inlineData": {"data": encoded, "mimeType": mime_type}}
     except Exception as e:
         logger.error("Gagal memproses gambar Base64: %s", e)
@@ -81,12 +71,11 @@ def _build_payload(
             parts.insert(0, image_part)
         contents.append({"role": role, "parts": parts})
 
-    # --- PENAMBAHAN SAFETY SETTINGS (LEVEL 2) ---
+    # Konversi threshold int menjadi string yang diterima oleh API
     safety_settings = [
-        {"category": f"HARM_CATEGORY_{category}", "threshold": BLOCK_THRESHOLD}
+        {"category": f"HARM_CATEGORY_{category}", "threshold": str(BLOCK_THRESHOLD)}
         for category in HARM_CATEGORIES.keys()
     ]
-    # ---------------------------------------------
 
     return {
         "system_instruction": {"parts": [{"text": system_prompt}]},
@@ -98,7 +87,7 @@ def _build_payload(
             "maxOutputTokens": 600, 
             "responseMimeType": "text/plain",
         },
-        "safetySettings": safety_settings, # <-- DITAMBAHKAN DI SINI
+        "safetySettings": safety_settings,
     }
 
 
@@ -110,33 +99,35 @@ async def call_gemini_stream(
     delay_seconds: float = 0.0,
     api_key: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
-    """Stream response tokens from Gemini API and yield per chunk."""
-
+    
     settings = get_settings()
 
-    # --- Tentukan API Key yang akan digunakan ---
     final_api_key = api_key or settings.gemini_api_key
     if not final_api_key:
-        raise ValueError("GEMINI_API_KEY tidak ditemukan atau kosong. Key harus disediakan via .env atau header permintaan.")
+        raise ValueError("GEMINI_API_KEY tidak ditemukan atau kosong.")
 
-    # --- PERBAIKAN DARI ANDA: Menggunakan logika fallback model yang benar ---
     model = settings.gemini_model.strip()
     
-    # Logic penentuan model tetap dipertahankan
-    allowed_models = {"gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.0-pro", "gemini-1.5-flash"}
-    if model not in allowed_models:
-        model = "gemini-1.5-flash" # Fallback ke model dasar yang paling umum
-
+    # --- PERBAIKAN URL UNTUK CHAT STREAMING ---
     base_url = settings.gemini_base_url.strip() if settings.gemini_base_url else \
         "https://generativelanguage.googleapis.com/v1beta/models"
 
+    # Pastikan base_url bersih dari '/models' agar tidak terjadi double pathing
+    if base_url.endswith("/models"):
+         base_url = base_url.rstrip("/models") 
+    
+    # URL CHAT STREAMING yang pasti benar
+    url = f"{base_url}/models/{model}:streamGenerateContent"
+    # ----------------------------------------
+    
     payload = _build_payload(messages, system_prompt, image_base64)
+    
     candidate_models = [model]
     last_error: Exception | None = None
 
     for current_model in candidate_models:
-        url = f"{base_url}/{current_model}:streamGenerateContent"
-        # --- Gunakan API Key yang sudah ditentukan ---
+        url = f"{base_url}/models/{current_model}:streamGenerateContent" # <-- HARUS DIUPDATE DI SINI JUGA
+        
         params = {"key": final_api_key, "alt": "sse"}
 
         attempt = 0
@@ -146,7 +137,7 @@ async def call_gemini_stream(
             try:
                 async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
                     async with client.stream("POST", url, params=params, json=payload) as response:
-                        # --- PERBAIKAN: Tangani error 401 (Unauthorized) secara eksplisit ---
+                        
                         if response.status_code == 401:
                             raise httpx.HTTPStatusError(
                                 "API Key tidak valid atau ditolak.",
@@ -154,7 +145,6 @@ async def call_gemini_stream(
                                 response=response,
                             )
                         
-                        # Note: Status 400 bisa jadi karena safety block. Kita biarkan raise_for_status yang menanganinya.
                         response.raise_for_status()
                         
                         aggregated_raw = ""
@@ -204,10 +194,12 @@ async def call_gemini_stream(
         f"Last status: {status if status is not None else 'unavailable'}. "
         "CEK: 1. Nama model di .env. 2. Kunci API Anda. 3. Billing Akun Google Cloud."
     )
+    # Reruntukan error agar ditangkap oleh error handler di main.py
     raise RuntimeError(message) from last_error
 
 
 async def _read_sse_payloads(response: httpx.Response) -> AsyncGenerator[str, None]:
+    # ... (unchanged helper code for SSE reading) ...
     buffer = []
     async for raw_line in response.aiter_lines():
         if raw_line.startswith(":") or raw_line.startswith("event"): continue
