@@ -31,8 +31,8 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSave, onClose }) =>
     setError(null);
 
     try {
-      // --- PERBAIKAN: GUNAKAN 127.0.0.1 AGAR KONSISTEN ---
-      const response = await fetch('http://127.0.0.1:8000/api/validate-api-key', {
+      // --- INI PERBAIKANNYA (PAKAI LINK HUGGING FACE) ---
+      const response = await fetch('https://fanlley-alfan.hf.space/api/validate-api-key', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -58,7 +58,8 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSave, onClose }) =>
       }
     } catch (err) {
       console.error("Error validating API key:", err);
-      setError("Gagal koneksi. Pastikan backend (Python) menyala.");
+      // Ganti pesan error biar jelas
+      setError("Gagal koneksi ke Server Hugging Face. (Mungkin server lagi tidur, coba 1 menit lagi)");
     } finally {
       setLoading(false);
     }
