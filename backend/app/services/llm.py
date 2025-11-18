@@ -79,10 +79,16 @@ async def call_gemini_stream(
     *,
     image_base64: Optional[str] = None,
     delay_seconds: float = 0.0,
+    api_key: Optional[str] = None,  # <-- Tambahkan parameter API Key
 ) -> AsyncGenerator[str, None]:
     """Stream response tokens from Gemini API and yield per chunk."""
 
     settings = get_settings()
+
+    # --- Tentukan API Key yang akan digunakan ---
+    final_api_key = api_key or settings.gemini_api_key
+    if not final_api_key:
+        raise ValueError("GEMINI_API_KEY tidak ditemukan atau kosong. Key harus disediakan via .env atau header permintaan.")
 
     # --- PERBAIKAN DARI ANDA: Menggunakan logika fallback model yang benar ---
     model = settings.gemini_model.strip()
@@ -102,19 +108,25 @@ async def call_gemini_stream(
 
     for current_model in candidate_models:
         url = f"{base_url}/{current_model}:streamGenerateContent"
-        params = {"key": settings.gemini_api_key, "alt": "sse"}
+        # --- Gunakan API Key yang sudah ditentukan ---
+        params = {"key": final_api_key, "alt": "sse"}
 
         attempt = 0
         backoff = settings.backoff_factor
         
         while True:
             try:
-                if not settings.gemini_api_key:
-                     raise ValueError("GEMINI_API_KEY tidak ditemukan atau kosong di .env.")
-
                 async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
                     async with client.stream("POST", url, params=params, json=payload) as response:
-                        response.raise_for_status() 
+                        # --- PERBAIKAN: Tangani error 401 (Unauthorized) secara eksplisit ---
+                        if response.status_code == 401:
+                            raise httpx.HTTPStatusError(
+                                "API Key tidak valid atau ditolak.",
+                                request=response.request,
+                                response=response,
+                            )
+                        response.raise_for_status()
+                        
                         aggregated_raw = ""
                         first_chunk = True
                         async for payload_json in _read_sse_payloads(response): 

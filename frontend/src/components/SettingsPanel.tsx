@@ -6,10 +6,16 @@ import { SHORTCUTS_HELP } from "../utils/keyboardShortcuts";
 type Props = {
   moodEnabled: boolean;
   onMoodToggle: (enabled: boolean) => void;
+  onApiKeyChangeClick: () => void; // Prop baru untuk handle klik
   showShortcuts?: boolean;
 };
 
-export default function SettingsPanel({ moodEnabled, onMoodToggle, showShortcuts = true }: Props) {
+export default function SettingsPanel({ 
+  moodEnabled, 
+  onMoodToggle, 
+  onApiKeyChangeClick, // Ambil prop
+  showShortcuts = true 
+}: Props) {
   return (
     <div className="settings-panel">
       <h3 className="section-title">⚙️ Pengaturan</h3>
@@ -29,6 +35,22 @@ export default function SettingsPanel({ moodEnabled, onMoodToggle, showShortcuts
           />
           <span className="toggle-slider"></span>
         </label>
+      </div>
+
+      {/* Bagian Baru untuk API Key */}
+      <div className="setting-item">
+        <div className="setting-info">
+          <label className="setting-label">🔑 API Key</label>
+          <p className="setting-desc">
+            Ubah atau perbarui Gemini API Key Anda.
+          </p>
+        </div>
+        <button 
+          className="button-change-key"
+          onClick={onApiKeyChangeClick}
+        >
+          Ubah Key
+        </button>
       </div>
 
       {showShortcuts && (

@@ -137,6 +137,137 @@ body{
 }
 .checkbox-wrap{ display:flex; align-items:center; gap:.6rem }
 
+/* ====== Settings Panel ====== */
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.setting-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(148, 163, 184, 0.05);
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.setting-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-right: 16px;
+}
+
+.setting-label {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.setting-desc {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.button-change-key {
+  background-color: #334155;
+  color: white;
+  padding: 8px 16px;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  transition: background-color 0.2s;
+  white-space: nowrap;
+}
+
+.button-change-key:hover {
+  background-color: #475569;
+}
+
+/* Toggle Switch */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 28px;
+}
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #334155;
+  transition: .4s;
+  border-radius: 34px;
+  border: 1px solid #475569;
+}
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #94a3b8;
+  transition: .4s;
+  border-radius: 50%;
+}
+input:checked + .toggle-slider {
+  background-color: var(--primary);
+  border-color: transparent;
+}
+input:checked + .toggle-slider:before {
+  transform: translateX(22px);
+  background-color: white;
+}
+
+/* Shortcuts */
+.shortcuts-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+.shortcuts-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 12px 0;
+}
+.shortcuts-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+}
+.shortcut-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+}
+.shortcut-key {
+  background: #334155;
+  border: 1px solid #475569;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-family: monospace;
+  font-size: 0.8rem;
+}
+.shortcut-action {
+  color: var(--muted);
+}
+
 /* ====== CHAT PANEL ====== */
 .chat{
   background: var(--panel);

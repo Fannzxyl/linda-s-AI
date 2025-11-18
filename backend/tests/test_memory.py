@@ -20,7 +20,7 @@ def memory_module(tmp_path, monkeypatch):
     config.get_settings.cache_clear()  # type: ignore[attr-defined]
     module = importlib.import_module("app.services.memory")
     importlib.reload(module)
-    module.init_db()
+    module.init_memory_system()
     yield module
 
 

@@ -1,13 +1,14 @@
-// C:\Alfan\linda-s-AI\frontend\src\App.tsx (ENHANCED VERSION WITH ALL IMPROVEMENTS)
+// C:\Alfan\linda-s-AI\frontend\src\App.tsx (ENHANCED VERSION WITH API KEY MODAL)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, SetStateAction } from "react"; 
-import Avatar, { AvatarState, Emotion } from "./components/Avatar"; 
+import type { Dispatch, SetStateAction } from "react";
+import Avatar, { AvatarState, Emotion } from "./components/Avatar";
 import Chat, { Msg } from "./components/Chat";
 import ErrorMessage from "./components/ErrorMessage";
 import SettingsPanel from "./components/SettingsPanel";
 import MoodIndicator from "./components/MoodIndicator";
 import ChatStats from "./components/ChatStats";
+import ApiKeyModal from "./components/ApiKeyModal"; // <-- 1. IMPORT MODAL
 import { exportChatAsText, exportChatAsJSON } from "./utils/chatExport";
 import { calculateMood, getMoodGreeting } from "./utils/moodSystem";
 import { parseError, getLindasErrorResponse } from "./utils/errorHandler";
@@ -36,10 +37,8 @@ function useLocalStorage<T>(key: string, initial: T) {
   return [val, setVal] as const;
 }
 
-// Helper untuk memetakan nama style ke Emotion yang akan digunakan oleh Avatar
 function toPersona(s: string) {
   const v = s.toLowerCase();
-  // --- PERUBAHAN 1: MENAMBAHKAN YANDERE ---
   if (v.includes("yandere")) return "yandere";
   if (v.includes("tsundere")) return "tsundere";
   if (v.includes("formal")) return "formal";
@@ -55,6 +54,10 @@ function autoResize(el: HTMLTextAreaElement) {
 
 /* APP */
 export default function App() {
+  // --- State Management for API Key ---
+  const [apiKey, setApiKey] = useLocalStorage<string | null>('geminiApiKey', null);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+
   // persona + theme
   const [styleName, setStyleName] = useLocalStorage("styleName", "Tsundere");
   const persona = useMemo(() => toPersona(styleName), [styleName]);
@@ -75,36 +78,37 @@ export default function App() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [typing, setTyping] = useState(false);
-  
-  // --- ENHANCED: Chat history with localStorage ---
   const [messages, setMessages] = useLocalStorage<Msg[]>("chatHistory", [
     {
       id: crypto.randomUUID(),
       role: "assistant",
-      content: "Nihaooooo!! Aku linda siap menjadi teman ngobrol mu.",
+      content: "Nihaooooo!! Aku linda siap menjadi teman ngobrol mu. Tapi sebelum itu, masukkan API Key kamu dulu ya!",
     },
   ]);
 
-  // --- STATE BARU UNTUK MULTIMODAL ---
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // --- NEW: Enhanced features state ---
   const [error, setError] = useState<any>(null);
   const [moodEnabled, setMoodEnabled] = useLocalStorage("moodEnabled", true);
   const [lastInteraction, setLastInteraction] = useLocalStorage("lastInteraction", Date.now());
   const [showSettings, setShowSettings] = useState(false);
   const [showStats, setShowStats] = useState(false);
   
-  // Calculate mood
   const mood = useMemo(() => 
     calculateMood(messages, lastInteraction, moodEnabled), 
     [messages, lastInteraction, moodEnabled]
   );
 
-  // --- ENHANCED: Keyboard shortcuts ---
+  // Check for API key on startup
+  useEffect(() => {
+    if (!apiKey) {
+      setIsApiKeyModalOpen(true);
+    }
+  }, [apiKey]);
+
   useEffect(() => {
     const handleShortcut = (action: ShortcutAction) => {
       switch (action) {
@@ -127,9 +131,8 @@ export default function App() {
     };
 
     return setupKeyboardShortcuts(handleShortcut);
-  }, [messages, styleName]);
+  }, [messages, styleName, apiKey]); // Added apiKey to dependencies
 
-  // --- ENHANCED: Show mood greeting when returning after long time ---
   useEffect(() => {
     const hoursSinceLastChat = (Date.now() - lastInteraction) / (1000 * 60 * 60);
     
@@ -137,7 +140,6 @@ export default function App() {
       const greeting = getMoodGreeting(mood.level, styleName);
       const lastMsg = messages[messages.length - 1];
       
-      // Only add greeting if last message wasn't from Linda
       if (lastMsg.role !== 'assistant') {
         setMessages(prev => [
           ...prev,
@@ -149,10 +151,19 @@ export default function App() {
         ]);
       }
     }
-  }, []); // Run once on mount
+  }, []);
 
+  const handleSaveApiKey = (key: string) => {
+    setApiKey(key);
+    setIsApiKeyModalOpen(false);
+    // Focus input after saving key
+    setTimeout(() => inputRef.current?.focus(), 100);
+  };
 
-  // --- FUNGSI BARU: Konversi File ke Base64 ---
+  const openApiKeyModal = () => {
+    setIsApiKeyModalOpen(true);
+  };
+
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -175,7 +186,6 @@ export default function App() {
     reader.readAsDataURL(file);
   }
 
-  // autoscroll
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     listRef.current?.scrollTo({
@@ -184,7 +194,6 @@ export default function App() {
     });
   }, [messages, typing]);
 
-  // --- ENHANCED: Export functions ---
   function handleExport(format: 'txt' | 'json') {
     if (messages.length <= 1) {
       alert('Belum ada chat yang bisa di-export!');
@@ -198,41 +207,38 @@ export default function App() {
     }
   }
 
-  // --- ENHANCED: Retry function for errors ---
   function handleRetry() {
     setError(null);
     onSend();
   }
 
-  // kirim pesan
   async function onSend() {
+    if (!apiKey) {
+      setIsApiKeyModalOpen(true);
+      return;
+    }
     const text = input.trim();
     if ((!text && !imageBase64) || sending) return; 
 
     setInput("");
     setSending(true);
     setTyping(true);
-    setError(null); // Clear any previous errors
+    setError(null);
 
-    // Update last interaction time
     setLastInteraction(Date.now());
 
-    // --- PERBAIKAN: HAPUS PREVIEW SEGERA (OPTIMISTIC UI) ---
-    // Simpan data gambar saat ini untuk pesan user
     const currentImageBase64 = imageBase64;
     const currentImagePreviewUrl = imagePreviewUrl;
 
-    // Bersihkan state gambar di composer SEGERA
     setImageBase64(null); 
     setImagePreviewUrl(null); 
     if(fileInputRef.current) fileInputRef.current.value = ''; 
-    // ----------------------------------------------------
     
     const userMsg: Msg = { 
         id: crypto.randomUUID(), 
         role: "user", 
         content: text || "(Gambar terkirim.)", 
-        image_url: currentImagePreviewUrl // Gunakan URL yang disimpan
+        image_url: currentImagePreviewUrl
     };
 
     const updatedMessages = [...messages, userMsg];
@@ -244,22 +250,30 @@ export default function App() {
 
     let finalText = "";
     try {
+      const headers = {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+        "X-Gemini-Api-Key": apiKey,
+      };
+
       const res = await fetch(CHAT_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-        },
+        headers,
         body: JSON.stringify({ 
             messages: history, 
             persona: styleName,
-            image_base64: currentImageBase64 // Gunakan Base64 yang disimpan
+            image_base64: currentImageBase64
         }),
       });
 
-      // --- ENHANCED: Better error handling ---
       if (!res.ok) {
         const errorInfo = parseError(null, res);
+        // Special handling for 401 Unauthorized (likely bad API key)
+        if (res.status === 401) {
+          errorInfo.message = "API Key tidak valid atau ditolak. Silakan periksa kembali.";
+          setApiKey(null); // Clear the bad key
+          setIsApiKeyModalOpen(true); // Re-open the modal
+        }
         const lindaResponse = getLindasErrorResponse(errorInfo, styleName);
         
         setMessages((m) => [
@@ -314,11 +328,10 @@ export default function App() {
 
         setTyping(false);
         setSending(false);
-        if (finalText.trim()) await updateEmotion(finalText.trim(), persona, setAvatar);
+        if (finalText.trim()) await updateEmotion(finalText.trim(), persona, setAvatar, apiKey);
         return;
       }
     } catch (err) {
-      // --- ENHANCED: Better error handling for network errors ---
       const errorInfo = parseError(err);
       const lindaResponse = getLindasErrorResponse(errorInfo, styleName);
       
@@ -332,11 +345,15 @@ export default function App() {
       return;
     }
 
-    // fallback JSON (non-SSE)
+    // Fallback JSON (non-SSE)
     try {
+      const headers = {
+        "Content-Type": "application/json",
+        "X-Gemini-Api-Key": apiKey,
+      };
       const res = await fetch(CHAT_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ messages: history, persona: styleName, image_base64: currentImageBase64 }), 
       });
       let reply = "Baik. Ada lagi?";
@@ -354,9 +371,8 @@ export default function App() {
         ...m,
         { id: crypto.randomUUID(), role: "assistant", content: reply },
       ]);
-      if (reply) await updateEmotion(reply, persona, setAvatar);
+      if (reply) await updateEmotion(reply, persona, setAvatar, apiKey);
     } catch (err) {
-      // --- ENHANCED: Better error handling for fallback ---
       const errorInfo = parseError(err);
       const lindaResponse = getLindasErrorResponse(errorInfo, styleName);
       
@@ -406,6 +422,12 @@ export default function App() {
 
   return (
     <div className="app">
+      <ApiKeyModal 
+        isOpen={!apiKey || isApiKeyModalOpen} 
+        onSave={handleSaveApiKey} 
+        onClose={() => setIsApiKeyModalOpen(false)} 
+      />
+
       <header className="app-header">
         <div className="brand">
           <span className="brand-dot" />
@@ -446,7 +468,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* --- ENHANCED: Mood Indicator --- */}
           <MoodIndicator moodLevel={mood.level} enabled={moodEnabled} />
 
           <div className="control">
@@ -478,16 +499,15 @@ export default function App() {
             </div>
           </div>
 
-          {/* --- ENHANCED: Settings Panel --- */}
           {showSettings && (
             <SettingsPanel 
               moodEnabled={moodEnabled}
               onMoodToggle={setMoodEnabled}
+              onApiKeyChangeClick={openApiKeyModal}
               showShortcuts={true}
             />
           )}
 
-          {/* --- ENHANCED: Chat Stats --- */}
           {showStats && <ChatStats messages={messages} />}
         </aside>
 
@@ -498,7 +518,6 @@ export default function App() {
             </h3>
           </div>
 
-          {/* --- ENHANCED: Error Message Display --- */}
           {error && (
             <ErrorMessage 
               error={error}
@@ -553,7 +572,7 @@ export default function App() {
               />
               <button
                 className="send"
-                disabled={(!input.trim() && !imageBase64) || sending} 
+                disabled={(!input.trim() && !imageBase64) || sending || !apiKey}
                 onClick={onSend}
               >
                 {sending ? "Mengirim…" : "Kirim"}
@@ -575,12 +594,17 @@ export default function App() {
 async function updateEmotion(
   text: string,
   persona: string,
-  setAvatar: Dispatch<SetStateAction<AvatarState>>
+  setAvatar: Dispatch<SetStateAction<AvatarState>>,
+  apiKey: string | null // <-- Pass API key
 ) {
+  if (!apiKey) return; // Don't run if no key
   try {
     const res = await fetch(EMOTION_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "X-Gemini-Api-Key": apiKey, // <-- Add API key to header
+      },
       body: JSON.stringify({ text, persona }),
     });
     if (!res.ok) throw new Error(String(res.status));
