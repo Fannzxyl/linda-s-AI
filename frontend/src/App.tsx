@@ -1,4 +1,4 @@
-// src/App.tsx (FINAL ONLINE VERSION FIXED)
+// src/App.tsx (FINAL ONLINE VERSION FIXED - 422 RESOLVED)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
@@ -171,10 +171,10 @@ export default function App() {
     setImageBase64(null); setImagePreviewUrl(null); 
     if(fileInputRef.current) fileInputRef.current.value = ''; 
     
-    // FIX: Buat objek Msg tanpa ID dulu untuk dikirim ke Python, tapi ID disimpan untuk display
+    // 1. BUAT MSG DENGAN ID UNTUK FRONTEND DISPLAY (TS-COMPLIANT)
     const newUserMsgId = crypto.randomUUID();
     const userMsg: Msg = { 
-        id: newUserMsgId, // <-- WAJIB ADA ID UNTUK FRONTEND TYPE Msg
+        id: newUserMsgId, 
         role: "user", 
         content: text || "(Gambar)", 
         image_url: currentImagePreviewUrl
@@ -182,10 +182,14 @@ export default function App() {
     const updatedMessages = [...messages, userMsg]; 
     setMessages(updatedMessages);
 
-    // --- FIX 422 BUG: Map History ke Format Pydantic (HAPUS ID) ---
+    // 2. BUAT HISTORY UNTUK PYDANTIC (HAPUS ID, KIRIM STRUCTURE SAMA)
     const history = updatedMessages
       .filter((x) => x.role !== "system")
-      .map(({ role, content, image_url }) => ({ role, content, image_url: image_url || null })); 
+      .map((msg) => ({ // Menggunakan destructuring sederhana untuk mendapatkan field yang bersih
+          role: msg.role, 
+          content: msg.content, 
+          image_url: msg.image_url || null // Pastikan null jika kosong
+      })); 
     // -------------------------------------------------------------
     
     let finalText = "";
@@ -204,16 +208,22 @@ export default function App() {
       }
       if (res.ok && res.body) {
         const id = crypto.randomUUID();
-        setMessages((m) => [...m, { id: newUserMsgId, role: "assistant", content: "" }]); // Ganti: pakai ID yang sama dengan message user sebelumnya
+        // Gunakan ID unik untuk pesan balasan asisten
+        setMessages((m) => [...m, { id, role: "assistant", content: "" }]); 
+        
         const reader = res.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
+        const assistantMsgId = id; 
+
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
+
           const blocks = buffer.split("\n\n");
           buffer = blocks.pop() || "";
+
           for (const blk of blocks) {
             let eventType = "message";
             const dataLines: string[] = [];
@@ -226,8 +236,7 @@ export default function App() {
             if (!data) continue;
             if (eventType === "token") {
               finalText += data;
-              // FIX: Pakai ID baru untuk pesan asisten yang baru dibuat
-              setMessages((m) => m.map((msg) => msg.id === id ? { ...msg, content: (msg.content || "") + data } : msg)); 
+              setMessages((m) => m.map((msg) => msg.id === assistantMsgId ? { ...msg, content: (msg.content || "") + data } : msg));
             }
           }
         }
