@@ -1,4 +1,4 @@
-# backend/app/services/llm.py (VERSI FINAL DENGAN LOGIKA MODEL YANG BENAR)
+# backend/app/services/llm.py (VERSI FINAL DENGAN SAFETY SETTINGS DAN LOGIKA MODEL YANG BENAR)
 
 import asyncio
 import json
@@ -17,7 +17,24 @@ from ..schemas import Message
 logger = logging.getLogger(__name__)
 _CONNECTED_FLAG = False
 
-# ... (semua fungsi helper dari _build_image_part_dict hingga _build_payload tetap sama) ...
+# --- CONSTANTS UNTUK SAFETY SETTINGS (Google API Safety Harms) ---
+# Menggunakan nilai INT yang setara dengan HarmCategory dan HarmBlockThreshold
+HARM_CATEGORIES = {
+    "HARASSMENT": 1,
+    "HATE_SPEECH": 2,
+    "SEXUALLY_EXPLICIT": 3,
+    "DANGEROUS_CONTENT": 4,
+}
+
+# BLOCK_NONE = 4 (Izinkan semua, tidak disarankan)
+# BLOCK_LOW_AND_ABOVE = 1 
+# BLOCK_MEDIUM_AND_ABOVE = 2 
+# BLOCK_ONLY_HIGH = 3 (Default Google)
+
+# KITA PERKETAT: Block konten yang terdeteksi Medium (2) atau lebih tinggi
+BLOCK_THRESHOLD = 2 
+
+
 def _build_image_part_dict(image_base64: str) -> Optional[Dict[str, Any]]:
     if "," in image_base64:
         header, encoded = image_base64.split(",", 1)
@@ -26,6 +43,7 @@ def _build_image_part_dict(image_base64: str) -> Optional[Dict[str, Any]]:
         encoded = image_base64
         mime_type = "image/jpeg"
     try:
+        # Pengecekan PIL hanya untuk memastikan base64-nya valid gambar
         image_bytes = base64.b64decode(encoded)
         Image.open(BytesIO(image_bytes))
         return {"inlineData": {"data": encoded, "mimeType": mime_type}}
@@ -62,15 +80,26 @@ def _build_payload(
         if i == last_user_content_index and image_part:
             parts.insert(0, image_part)
         contents.append({"role": role, "parts": parts})
+
+    # --- PENAMBAHAN SAFETY SETTINGS (LEVEL 2) ---
+    safety_settings = [
+        {"category": f"HARM_CATEGORY_{category}", "threshold": BLOCK_THRESHOLD}
+        for category in HARM_CATEGORIES.keys()
+    ]
+    # ---------------------------------------------
+
     return {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
-        "generationConfig": {
-            "temperature": 0.65, "topP": 0.9, "topK": 32,
-            "maxOutputTokens": 600, "responseMimeType": "text/plain",
+        "config": {
+            "temperature": 0.65, 
+            "topP": 0.9, 
+            "topK": 32,
+            "maxOutputTokens": 600, 
+            "responseMimeType": "text/plain",
         },
+        "safetySettings": safety_settings, # <-- DITAMBAHKAN DI SINI
     }
-# ... (akhir dari fungsi helper yang tidak berubah) ...
 
 
 async def call_gemini_stream(
@@ -79,7 +108,7 @@ async def call_gemini_stream(
     *,
     image_base64: Optional[str] = None,
     delay_seconds: float = 0.0,
-    api_key: Optional[str] = None,  # <-- Tambahkan parameter API Key
+    api_key: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream response tokens from Gemini API and yield per chunk."""
 
@@ -92,12 +121,11 @@ async def call_gemini_stream(
 
     # --- PERBAIKAN DARI ANDA: Menggunakan logika fallback model yang benar ---
     model = settings.gemini_model.strip()
-    if "1.5" in model:
-        model = "gemini-2.0-flash"
-
-    allowed_models = {"gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.0-pro"}
+    
+    # Logic penentuan model tetap dipertahankan
+    allowed_models = {"gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.0-pro", "gemini-1.5-flash"}
     if model not in allowed_models:
-        model = "gemini-2.0-flash"
+        model = "gemini-1.5-flash" # Fallback ke model dasar yang paling umum
 
     base_url = settings.gemini_base_url.strip() if settings.gemini_base_url else \
         "https://generativelanguage.googleapis.com/v1beta/models"
@@ -125,6 +153,8 @@ async def call_gemini_stream(
                                 request=response.request,
                                 response=response,
                             )
+                        
+                        # Note: Status 400 bisa jadi karena safety block. Kita biarkan raise_for_status yang menanganinya.
                         response.raise_for_status()
                         
                         aggregated_raw = ""
@@ -176,7 +206,7 @@ async def call_gemini_stream(
     )
     raise RuntimeError(message) from last_error
 
-# ... (sisa file dari _read_sse_payloads hingga akhir tetap sama) ...
+
 async def _read_sse_payloads(response: httpx.Response) -> AsyncGenerator[str, None]:
     buffer = []
     async for raw_line in response.aiter_lines():
