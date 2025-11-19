@@ -1,4 +1,4 @@
-// src/App.tsx (FINAL BUILD: Fixed Image Persistence & UI)
+// src/App.tsx (FINAL MOBILE LAYOUT FIX)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
@@ -15,8 +15,7 @@ import { parseError, getLindasErrorResponse } from "./utils/errorHandler";
 import { setupKeyboardShortcuts, ShortcutAction } from "./utils/keyboardShortcuts";
 
 /* --- URL CONFIG --- */
-// Cek .env dulu, kalau gak ada pake localhost default
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://fanlley-alfan.hf.space";
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 const CHAT_URL = `${BASE_URL}/chat`;
 const RESET_URL = `${BASE_URL}/reset`;
 const EMOTION_URL = `${BASE_URL}/emotion`;
@@ -66,11 +65,7 @@ export default function App() {
   }, [persona]);
 
   const [avatar, setAvatar] = useState<AvatarState>({
-    emotion: "neutral",
-    blink: true,
-    wink: false,
-    headSwaySpeed: 1.0,
-    glow: "#a78bfa",
+    emotion: "neutral", blink: true, wink: false, headSwaySpeed: 1.0, glow: "#a78bfa",
   });
 
   const [input, setInput] = useState("");
@@ -99,14 +94,8 @@ export default function App() {
     [messages, lastInteraction, moodEnabled]
   );
 
-  // --- LOGIKA BEGAL (Auth Wall) ---
-  useEffect(() => {
-    if (!apiKey) {
-      setIsApiKeyModalOpen(true);
-    }
-  }, [apiKey]);
+  useEffect(() => { if (!apiKey) setIsApiKeyModalOpen(true); }, [apiKey]);
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handleShortcut = (action: ShortcutAction) => {
       switch (action) {
@@ -120,7 +109,6 @@ export default function App() {
     return setupKeyboardShortcuts(handleShortcut);
   }, [messages, styleName, apiKey]);
 
-  // Greeting otomatis
   useEffect(() => {
     const hoursSinceLastChat = (Date.now() - lastInteraction) / (1000 * 60 * 60);
     if (hoursSinceLastChat > 6 && moodEnabled && messages.length > 1) {
@@ -140,15 +128,9 @@ export default function App() {
 
   const openApiKeyModal = () => setIsApiKeyModalOpen(true);
 
-  // --- FITUR RESET TOTAL ---
   const handleHardReset = () => {
     if (window.confirm("Yakin mau reset total? Chat hilang & API Key kehapus lho.")) {
-      localStorage.removeItem('geminiApiKey');
-      localStorage.removeItem('chatHistory');
-      localStorage.removeItem('styleName');
-      localStorage.removeItem('moodEnabled');
-      localStorage.clear(); 
-      window.location.reload();
+      localStorage.clear(); window.location.reload();
     }
   };
 
@@ -177,36 +159,26 @@ export default function App() {
 
   function handleRetry() { setError(null); onSend(); }
 
-  // --- FUNGSI KIRIM PESAN (CORE LOGIC) ---
   async function onSend() {
     if (!apiKey) { setIsApiKeyModalOpen(true); return; }
     const text = input.trim();
     if ((!text && !imageBase64) || sending) return; 
     
-    // 1. Simpan state gambar SEBELUM di-reset
     const currentImageBase64 = imageBase64;
     const currentImagePreviewUrl = imagePreviewUrl;
 
-    // 2. Reset UI
     setInput(""); setSending(true); setTyping(true); setError(null); setLastInteraction(Date.now());
     setImageBase64(null); setImagePreviewUrl(null); 
     if(fileInputRef.current) fileInputRef.current.value = ''; 
     
-    // 3. Buat Pesan User (FIX: Gunakan Base64 untuk image_url, BUKAN PreviewUrl)
     const userMsg: Msg = { 
-      id: crypto.randomUUID(), 
-      role: "user", 
-      content: text || "(Gambar)", 
-      image_url: currentImageBase64 // <-- INI PERBAIKANNYA (Biar gambar awet)
+      id: crypto.randomUUID(), role: "user", content: text || "(Gambar)", image_url: currentImageBase64 
     };
     
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
 
-    // 4. Siapkan Payload Backend (Filter pesan kosong biar gak error 422)
-    const history = updatedMessages
-      .filter((x) => x.role !== "system" && x.content.trim() !== "") 
-      .map(({ role, content }) => ({ role, content })); 
+    const history = updatedMessages.filter((x) => x.role !== "system" && x.content.trim() !== "").map(({ role, content }) => ({ role, content })); 
     
     let finalText = "";
     try {
@@ -277,34 +249,50 @@ export default function App() {
   return (
     <div className="app">
       <ApiKeyModal isOpen={!apiKey || isApiKeyModalOpen} onSave={handleSaveApiKey} onClose={() => setIsApiKeyModalOpen(false)} />
+      
+      {/* --- HEADER BARU (ADA AVATAR KECIL) --- */}
       <header className="app-header">
-        <div className="brand"><span className="brand-dot" />Linda AI</div>
+        <div className="brand">
+          {/* Avatar Mini di Header */}
+          <div className="brand-avatar">
+            <Avatar state={avatar} typing={typing} />
+          </div>
+          <span className="brand-text">Linda AI</span>
+        </div>
+        
         <div className="header-actions">
           <button className="icon-btn" onClick={() => setShowStats(!showStats)}>📊</button>
           <button className="icon-btn" onClick={() => handleExport('txt')}>💾</button>
           <button className="icon-btn" onClick={() => setShowSettings(!showSettings)}>⚙️</button>
         </div>
       </header>
+      
       <main className="layout">
         <aside className="sidebar">
-          <h3 className="section-title">Avatar</h3>
-          <div className="avatar-card">
+          {/* Avatar Besar (Cuma buat Desktop) */}
+          <div className="avatar-card desktop-only">
             <div className="avatar-glow" />
             <div className="avatar-canvas">
               <Avatar state={avatar} typing={typing} />
             </div>
           </div>
-          <MoodIndicator moodLevel={mood.level} enabled={moodEnabled} />
-          <div className="control">
-            <label className="label">Gaya bicara</label>
-            <select className="select" value={styleName} onChange={(e) => setStyleName(e.target.value)}>
-              <option>Tsundere</option><option>Yandere</option><option>Ceria</option><option>Santai</option><option>Formal</option><option>Netral</option>
-            </select>
-            <div className="button-group">
-              <button className="pill" onClick={onClear}>🗑️ Clear</button>
-              <button className="pill pill-secondary" onClick={() => handleExport('json')}>📥 Export</button>
+          
+          {/* Kontrol (Cuma buat Desktop) */}
+          <div className="desktop-controls">
+            <MoodIndicator moodLevel={mood.level} enabled={moodEnabled} />
+            <div className="control">
+              <label className="label">Gaya bicara</label>
+              <select className="select" value={styleName} onChange={(e) => setStyleName(e.target.value)}>
+                <option>Tsundere</option><option>Yandere</option><option>Ceria</option><option>Santai</option><option>Formal</option><option>Netral</option>
+              </select>
+              <div className="button-group">
+                <button className="pill" onClick={onClear}>🗑️ Clear</button>
+                <button className="pill pill-secondary" onClick={() => handleExport('json')}>📥 Export</button>
+              </div>
             </div>
           </div>
+
+          {/* Settings & Stats (Modal) */}
           {showSettings && (
             <SettingsPanel 
               moodEnabled={moodEnabled} 
@@ -316,6 +304,7 @@ export default function App() {
           )}
           {showStats && <ChatStats messages={messages} />}
         </aside>
+
         <section className="chat">
           <div className="chat-header"><h3 className="section-title" style={{ fontSize: "1rem" }}>Obrolan</h3></div>
           {error && <ErrorMessage error={error} onRetry={handleRetry} onDismiss={() => setError(null)} />}

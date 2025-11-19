@@ -8,14 +8,12 @@
   --panel-strong: rgba(20, 25, 40, 0.95);
   --text: #e9edf5;
   --muted: #94a3b8;
-  
-  /* Default Colors */
   --primary: #8b5cf6;
   --accent: #d946ef;
   --ring: rgba(139, 92, 246, 0.3);
-  
   --radius: 24px;
   --gap-safe: env(safe-area-inset-bottom, 20px);
+  --shadow-glow: 0 0 40px rgba(139, 92, 246, 0.15);
 }
 
 /* Persona Dynamic Colors */
@@ -64,8 +62,31 @@ body {
   z-index: 50;
 }
 
-.brand { font-weight: 800; font-size: 1.1rem; letter-spacing: -0.5px; display: flex; align-items: center; gap: 8px; }
-.brand-dot { width: 8px; height: 8px; background: var(--primary); border-radius: 50%; box-shadow: 0 0 10px var(--primary); }
+/* --- HEADER AVATAR (NEW) --- */
+.brand { 
+  font-weight: 800; font-size: 1.1rem; letter-spacing: -0.5px; 
+  display: flex; align-items: center; gap: 10px; 
+}
+
+.brand-avatar {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid var(--primary);
+  background: rgba(255,255,255,0.1);
+  display: none; /* Default: Hidden di Desktop */
+}
+
+.brand-text {
+  background: linear-gradient(to right, #fff, var(--primary));
+  
+  /* --- TAMBAHKAN BARIS INI (Standar) --- */
+  background-clip: text; 
+  
+  /* --- INI YANG LAMA (Vendor Prefix) --- */
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
 
 .header-actions { display: flex; gap: 8px; }
 .icon-btn {
@@ -83,7 +104,7 @@ body {
 .layout {
   flex: 1;
   display: grid;
-  grid-template-columns: 340px 1fr; /* Sidebar agak lebar dikit biar lega */
+  grid-template-columns: 320px 1fr;
   gap: 20px;
   padding: 20px;
   max-width: 1400px;
@@ -93,7 +114,7 @@ body {
 }
 
 /* =========================================
-   5. SIDEBAR (FIXED LAYOUT)
+   5. SIDEBAR
    ========================================= */
 .sidebar {
   background: var(--panel);
@@ -103,25 +124,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  
-  /* SCROLL LOGIC */
-  overflow-y: auto; 
-  height: 100%; /* Pastikan dia ngisi tinggi layout */
+  overflow-y: auto;
   scrollbar-width: none;
 }
 .sidebar::-webkit-scrollbar { display: none; }
 
-/* --- FIX PENTING: BIAR GAK KEGENCET --- */
-.sidebar > * {
-  flex-shrink: 0; /* JANGAN MAU DIKECILIN! */
-}
-
-/* Avatar Card */
+/* Avatar Card (Desktop) */
 .avatar-card {
   position: relative;
   width: 100%;
-  /* Paksa tinggi minimal biar gak ilang */
-  min-height: 300px; 
   aspect-ratio: 1/1;
   background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.03), transparent 70%);
   border-radius: 20px;
@@ -274,40 +285,73 @@ body {
 }
 
 /* =========================================
-   7. MOBILE RESPONSIVE
+   7. MOBILE RESPONSIVE (THE MAGIC SAUCE)
    ========================================= */
 @media (max-width: 768px) {
-  .app-header { height: 50px; padding: 0 16px; }
-  .layout { display: flex; flex-direction: column; padding: 0; gap: 0; }
+  .app-header {
+    height: 60px;
+    padding: 0 16px;
+  }
 
+  /* Tampilkan Avatar di Header */
+  .brand-avatar { display: block; }
+
+  .layout {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    gap: 0;
+    height: calc(100dvh - 60px); /* Full height minus header */
+  }
+
+  /* Sidebar jadi "Invisible Container" buat Settings */
   .sidebar {
-    flex-shrink: 0;
-    background: transparent; border: none; border-radius: 0;
-    padding: 10px 16px;
-    flex-direction: row; align-items: center; gap: 12px;
-    max-height: 140px; overflow: visible;
+    position: absolute; /* Lepas dari flow */
+    width: 0; height: 0; padding: 0; border: none;
+    overflow: visible; /* Biar modal setting bisa keluar */
   }
 
-  .avatar-card {
-    width: 100px; height: 100px; min-height: 100px; /* Fix height di HP */
-    border-radius: 50%; flex-shrink: 0;
-    background: rgba(0,0,0,0.3);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  /* Sembunyikan Elemen Desktop */
+  .desktop-only, .desktop-controls {
+    display: none !important;
   }
 
-  .control, .mood-indicator { display: none; }
-  
+  /* Chat Area Full Screen */
   .chat {
-    flex: 1; border-radius: 24px 24px 0 0; border: none;
-    border-top: 1px solid rgba(255,255,255,0.1);
+    flex: 1;
+    border-radius: 0;
+    border: none;
     background: #0b101a;
   }
 
   .messages { padding: 16px; }
   .msg { max-width: 90%; }
   .bubble { font-size: 0.9rem; padding: 10px 14px; }
-  .composer { padding-bottom: var(--gap-safe); }
+
+  .composer {
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  
   .upload-label { font-size: 1.4rem; padding: 8px; }
+
+  /* Settings Modal Fullscreen */
+  .settings-panel-scroll {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 9999;
+    background: rgba(15, 23, 42, 0.98) !important;
+    backdrop-filter: blur(10px);
+    padding: 20px !important;
+    padding-top: 70px !important;
+    border-radius: 0 !important;
+    border: none !important;
+    animation: slideUp 0.3s ease-out;
+  }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
 /* =========================================
