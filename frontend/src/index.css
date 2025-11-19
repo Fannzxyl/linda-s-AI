@@ -79,11 +79,7 @@ body {
 
 .brand-text {
   background: linear-gradient(to right, #fff, var(--primary));
-  
-  /* --- TAMBAHKAN BARIS INI (Standar) --- */
   background-clip: text; 
-  
-  /* --- INI YANG LAMA (Vendor Prefix) --- */
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -334,18 +330,31 @@ body {
   
   .upload-label { font-size: 1.4rem; padding: 8px; }
 
-  /* Settings Modal Fullscreen */
+  /* --- FIX SETTINGS PANEL (JADI FULLSCREEN MODAL SOLID) --- */
   .settings-panel-scroll {
     position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    z-index: 9999;
-    background: rgba(15, 23, 42, 0.98) !important;
-    backdrop-filter: blur(10px);
+    top: 0; 
+    left: 0; 
+    right: 0; 
+    bottom: 0;
+    z-index: 99999 !important; /* Pastikan paling atas */
+    
+    /* --- PERBAIKAN UTAMA DISINI --- */
+    background-color: #020617 !important; /* WARNA HITAM PEKAT (Gak Transparan) */
+    background-image: none !important;    /* Hapus efek gradasi/gambar */
+    backdrop-filter: none !important;     /* Hapus blur biar enteng */
+    /* ------------------------------ */
+    
     padding: 20px !important;
-    padding-top: 70px !important;
+    padding-top: 20px !important;
     border-radius: 0 !important;
     border: none !important;
-    animation: slideUp 0.3s ease-out;
+    animation: slideUp 0.25s ease-out;
+    
+    /* Biar bisa discroll kalau settingnya panjang */
+    overflow-y: auto !important; 
+    display: flex;
+    flex-direction: column;
   }
 }
 

@@ -299,6 +299,13 @@ export default function App() {
               onMoodToggle={setMoodEnabled} 
               onApiKeyChangeClick={openApiKeyModal} 
               onHardReset={handleHardReset} 
+              
+              // --- PROPS BARU ---
+              styleName={styleName}
+              onStyleChange={(e) => setStyleName(e.target.value)}
+              onClose={() => setShowSettings(false)}
+              // -----------------
+              
               showShortcuts={true} 
             />
           )}

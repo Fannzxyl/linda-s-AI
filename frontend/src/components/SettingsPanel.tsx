@@ -6,6 +6,10 @@ type Props = {
   onMoodToggle: (enabled: boolean) => void;
   onApiKeyChangeClick: () => void;
   onHardReset: () => void;
+  
+  styleName: string;
+  onStyleChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  onClose: () => void; 
   showShortcuts?: boolean;
 };
 
@@ -14,193 +18,180 @@ export default function SettingsPanel({
   onMoodToggle, 
   onApiKeyChangeClick, 
   onHardReset,
+  styleName,       
+  onStyleChange,   
+  onClose,         
   showShortcuts = true 
 }: Props) {
 
-  // --- STYLING MODERN & COMPACT ---
+  // --- STYLING: MODAL MELAYANG (POP-UP) ---
   const styles: { [key: string]: React.CSSProperties } = {
-    panel: {
-      backgroundColor: 'rgba(15, 23, 42, 0.6)', // Lebih transparan
-      backdropFilter: 'blur(12px)', // Efek kaca buram
-      border: '1px solid rgba(255, 255, 255, 0.05)', // Border super tipis
-      borderRadius: '20px', // Lebih bulat
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '12px', // Gap diperkecil biar muat
-      padding: '16px',
-      color: '#f8fafc',
-      overflowY: 'auto',
-      scrollbarWidth: 'none', // Sembunyikan scrollbar (Firefox)
-      msOverflowStyle: 'none',  // Sembunyikan scrollbar (IE/Edge)
-    },
-    header: {
-      fontWeight: '700',
-      marginBottom: '4px',
+    // 1. Overlay Gelap (Background Belakang)
+    overlay: {
+      position: 'fixed',
+      top: 0, left: 0, right: 0, bottom: 0,
+      backgroundColor: 'rgba(0, 0, 0, 0.8)', // Gelap transparan
+      backdropFilter: 'blur(5px)', // Blur chat di belakang
+      zIndex: 9999, // Paling atas
       display: 'flex',
       alignItems: 'center',
-      gap: '8px',
-      color: '#a78bfa',
-      textTransform: 'uppercase',
-      letterSpacing: '1px',
-      fontSize: '0.85rem' // <-- FIX: Cuma satu fontSize sekarang
+      justifyContent: 'center',
+      padding: '20px'
     },
-    card: {
-      backgroundColor: 'rgba(30, 41, 59, 0.4)', // Semi transparan
-      border: '1px solid rgba(255, 255, 255, 0.05)',
-      borderRadius: '16px',
-      padding: '12px 16px', // Padding diperkecil
+    // 2. Kotak Panel Setting
+    panel: {
+      backgroundColor: '#0f172a', // Solid Dark Blue
+      border: '1px solid rgba(255, 255, 255, 0.1)',
+      borderRadius: '24px',
+      width: '100%',
+      maxWidth: '420px', // Batasi lebar biar rapi di Desktop
+      maxHeight: '90vh', // Jangan lebih tinggi dari layar
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '12px',
+      padding: '24px',
+      color: '#f8fafc',
+      overflowY: 'auto', // Scroll kalau kepanjangan
+      boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+      position: 'relative'
+    },
+    headerRow: {
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
-      transition: 'all 0.2s',
+      marginBottom: '16px',
+      paddingBottom: '16px',
+      borderBottom: '1px solid rgba(255,255,255,0.1)'
+    },
+    headerTitle: {
+      fontWeight: '800',
+      color: '#a78bfa',
+      textTransform: 'uppercase',
+      letterSpacing: '1px',
+      fontSize: '1rem',
+      display: 'flex', alignItems: 'center', gap: '8px'
+    },
+    closeBtn: {
+      background: 'rgba(255,255,255,0.1)',
+      border: 'none',
+      color: '#fff',
+      width: '36px', height: '36px',
+      borderRadius: '50%',
+      cursor: 'pointer',
+      display: 'grid', placeItems: 'center',
+      fontSize: '1.2rem',
+      transition: '0.2s'
+    },
+    card: {
+      backgroundColor: 'rgba(30, 41, 59, 0.5)',
+      border: '1px solid rgba(255, 255, 255, 0.05)',
+      borderRadius: '16px',
+      padding: '16px',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+    },
+    select: {
+      backgroundColor: '#020617',
+      color: 'white',
+      border: '1px solid #334155',
+      padding: '8px 12px',
+      borderRadius: '8px',
+      outline: 'none',
+      fontSize: '0.9rem',
+      cursor: 'pointer',
+      minWidth: '130px'
     },
     cardDanger: {
       backgroundColor: 'rgba(239, 68, 68, 0.05)', 
       border: '1px dashed rgba(239, 68, 68, 0.2)',
       borderRadius: '16px',
-      padding: '12px 16px',
-      marginTop: '4px'
+      padding: '16px',
+      marginTop: '8px'
     },
-    info: {
-      flex: 1,
-      paddingRight: '12px'
-    },
-    label: {
-      display: 'block',
-      fontSize: '0.85rem',
-      fontWeight: '600',
-      marginBottom: '2px',
-      color: '#f1f5f9'
-    },
-    desc: {
-      fontSize: '0.7rem',
-      color: '#94a3b8',
-      lineHeight: '1.3'
-    },
-    // Toggle Switch (Diperkecil dikit)
-    toggleLabel: {
-      position: 'relative', display: 'inline-block', width: '40px', height: '22px', cursor: 'pointer'
-    },
+    info: { flex: 1, paddingRight: '12px' },
+    label: { display: 'block', fontSize: '0.9rem', fontWeight: '600', marginBottom: '4px', color: '#f1f5f9' },
+    desc: { fontSize: '0.75rem', color: '#94a3b8', lineHeight: '1.3' },
+    
+    toggleLabel: { position: 'relative', display: 'inline-block', width: '44px', height: '24px', cursor: 'pointer' },
     toggleInput: { opacity: 0, width: 0, height: 0 },
-    toggleSlider: {
-      position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0,
-      backgroundColor: '#334155', transition: '.3s', borderRadius: '34px'
-    },
+    toggleSlider: { position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#334155', transition: '.3s', borderRadius: '34px' },
     toggleSliderActive: { backgroundColor: '#8b5cf6' },
-    toggleKnob: {
-      position: 'absolute', content: '""', height: '16px', width: '16px',
-      left: '3px', bottom: '3px', backgroundColor: 'white', transition: '.3s', borderRadius: '50%'
-    },
-    toggleKnobActive: { transform: 'translateX(18px)' },
+    toggleKnob: { position: 'absolute', content: '""', height: '18px', width: '18px', left: '3px', bottom: '3px', backgroundColor: 'white', transition: '.3s', borderRadius: '50%' },
+    toggleKnobActive: { transform: 'translateX(20px)' },
     
-    // Buttons
-    btnSecondary: {
-      backgroundColor: 'rgba(255,255,255,0.05)',
-      border: '1px solid rgba(255,255,255,0.1)',
-      color: '#e2e8f0',
-      padding: '6px 12px',
-      borderRadius: '8px',
-      fontSize: '0.75rem',
-      cursor: 'pointer',
-      fontWeight: '600',
-      transition: '0.2s'
-    },
-    btnDanger: {
-      backgroundColor: 'rgba(239, 68, 68, 0.1)',
-      border: '1px solid rgba(239, 68, 68, 0.5)',
-      color: '#fca5a5',
-      padding: '6px 12px',
-      borderRadius: '8px',
-      fontSize: '0.75rem',
-      cursor: 'pointer',
-      fontWeight: '600',
-      whiteSpace: 'nowrap'
-    },
+    btnSecondary: { backgroundColor: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0', padding: '8px 14px', borderRadius: '8px', fontSize: '0.8rem', cursor: 'pointer', fontWeight: '600' },
+    btnDanger: { backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.5)', color: '#fca5a5', padding: '8px 14px', borderRadius: '8px', fontSize: '0.8rem', cursor: 'pointer', fontWeight: '600' },
     
-    // Shortcuts
-    shortcutsContainer: {
-      marginTop: '8px',
-      paddingTop: '12px',
-      borderTop: '1px solid rgba(255,255,255,0.05)'
-    },
-    shortcutRow: {
-      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      marginBottom: '6px', fontSize: '0.75rem', color: '#cbd5e1'
-    },
-    kbd: {
-      backgroundColor: 'rgba(0,0,0,0.3)',
-      border: '1px solid rgba(255,255,255,0.1)',
-      borderRadius: '4px',
-      padding: '2px 5px',
-      fontFamily: 'monospace',
-      fontSize: '0.7rem',
-      color: '#a78bfa',
-    }
+    shortcutsContainer: { marginTop: '12px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.05)' },
+    shortcutRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '0.8rem', color: '#cbd5e1' },
+    kbd: { backgroundColor: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '2px 6px', fontFamily: 'monospace', fontSize: '0.75rem', color: '#a78bfa' }
   };
 
   return (
-    <>
-      {/* Inject CSS buat hide scrollbar Chrome/Safari */}
-      <style>{`
-        .settings-panel-scroll::-webkit-scrollbar { display: none; }
-      `}</style>
-
-      <div style={styles.panel} className="settings-panel-scroll">
-        <div style={styles.header}>
-          <span>⚙️</span> Pengaturan
+    <div style={styles.overlay} onClick={onClose}>
+      {/* Stop Propagation biar klik di dalam panel gak nutup modal */}
+      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
+        
+        <div style={styles.headerRow}>
+          <div style={styles.headerTitle}><span>⚙️</span> PENGATURAN</div>
+          <button style={styles.closeBtn} onClick={onClose}>&times;</button>
         </div>
         
-        {/* CARD 1: MOOD */}
+        {/* CARD 1: GAYA BICARA */}
+        <div style={styles.card}>
+          <div style={styles.info}>
+            <label style={styles.label}>Gaya Bicara</label>
+            <p style={styles.desc}>Pilih kepribadian Linda.</p>
+          </div>
+          <select style={styles.select} value={styleName} onChange={onStyleChange}>
+            <option>Tsundere</option>
+            <option>Yandere</option>
+            <option>Ceria</option>
+            <option>Santai</option>
+            <option>Formal</option>
+            <option>Netral</option>
+          </select>
+        </div>
+
+        {/* CARD 2: MOOD */}
         <div style={styles.card}>
           <div style={styles.info}>
             <label style={styles.label}>Mood Dinamis</label>
             <p style={styles.desc}>Linda bisa baperan.</p>
           </div>
           <label style={styles.toggleLabel}>
-            <input
-              type="checkbox"
-              checked={moodEnabled}
-              onChange={(e) => onMoodToggle(e.target.checked)}
-              style={styles.toggleInput}
-            />
+            <input type="checkbox" checked={moodEnabled} onChange={(e) => onMoodToggle(e.target.checked)} style={styles.toggleInput} />
             <span style={{...styles.toggleSlider, ...(moodEnabled ? styles.toggleSliderActive : {})}}>
               <span style={{...styles.toggleKnob, ...(moodEnabled ? styles.toggleKnobActive : {})}} />
             </span>
           </label>
         </div>
 
-        {/* CARD 2: API KEY */}
+        {/* CARD 3: API KEY */}
         <div style={styles.card}>
           <div style={styles.info}>
             <label style={styles.label}>Koneksi API</label>
             <p style={styles.desc}>Ganti kunci Gemini.</p>
           </div>
-          <button 
-            style={styles.btnSecondary}
-            onClick={onApiKeyChangeClick}
-          >
-            Ganti
-          </button>
+          <button style={styles.btnSecondary} onClick={onApiKeyChangeClick}>Ganti</button>
         </div>
 
-        {/* CARD 3: DANGER */}
+        {/* CARD 4: DANGER */}
         <div style={styles.cardDanger}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <div style={styles.info}>
               <label style={{...styles.label, color: '#fca5a5'}}>Zona Bahaya</label>
               <p style={{...styles.desc, color: '#f87171'}}>Reset semua data.</p>
             </div>
-            <button style={styles.btnDanger} onClick={onHardReset}>
-              Reset
-            </button>
+            <button style={styles.btnDanger} onClick={onHardReset}>Reset</button>
           </div>
         </div>
 
         {/* SHORTCUTS */}
         {showShortcuts && (
           <div style={styles.shortcutsContainer}>
-            <h4 style={{...styles.label, marginBottom: '8px', color: '#94a3b8', fontSize: '0.7rem'}}>SHORTCUTS</h4>
+            <h4 style={{...styles.label, marginBottom: '12px', color: '#94a3b8', fontSize: '0.75rem'}}>SHORTCUTS</h4>
             <div>
               {SHORTCUTS_HELP.map((shortcut, i) => (
                 <div key={i} style={styles.shortcutRow}>
@@ -219,6 +210,6 @@ export default function SettingsPanel({
           </div>
         )}
       </div>
-    </>
+    </div>
   );
 }

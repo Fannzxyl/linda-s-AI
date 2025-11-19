@@ -12,8 +12,10 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSave, onClose }) =>
   const [error, setError] = useState<string | null>(null);
   const [showInfo, setShowInfo] = useState(false);
 
-  // URL Backend (Sesuaikan kalau pakai Localhost atau HuggingFace)
-  const VALIDATE_URL = "https://fanlley-alfan.hf.space/api/validate-api-key";
+  // --- UPDATE: BIAR DINAMIS (BACA .ENV) ---
+  // Sama kayak di App.tsx, biar sinkron
+  const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+  const VALIDATE_URL = `${BASE_URL}/api/validate-api-key`;
 
   useEffect(() => {
     if (isOpen) {
@@ -57,7 +59,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSave, onClose }) =>
         if (trimmedApiKey.startsWith("AIza")) {
            onSave(trimmedApiKey);
         } else {
-           setError("Gagal validasi. Pastikan koneksi aman.");
+           setError(`Gagal validasi (${response.status}). Cek koneksi backend.`);
         }
       }
     } catch (err) {
@@ -66,36 +68,34 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSave, onClose }) =>
       if (trimmedApiKey.startsWith("AIza")) {
         onSave(trimmedApiKey);
       } else {
-        setError("Jaringan error. Coba lagi nanti.");
+        setError("Jaringan error. Pastikan backend nyala.");
       }
     } finally {
       setLoading(false);
     }
   };
 
-  // --- STYLING: DARK CYBER AESTHETIC (MATCHING APP) ---
+  // --- STYLING: DARK CYBER AESTHETIC ---
   const styles: { [key: string]: React.CSSProperties } = {
     overlay: {
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.85)', // Lebih gelap biar fokus
-      backdropFilter: 'blur(8px)', // Efek blur di belakang
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, 
+      backgroundColor: 'rgba(0, 0, 0, 0.85)', 
+      backdropFilter: 'blur(8px)', 
+      display: 'flex', alignItems: 'center', justifyContent: 'center', 
+      zIndex: 10000, // Paling Atas!
       fontFamily: '"Inter", sans-serif',
     },
     modal: {
-      backgroundColor: '#1e293b', // Slate-800 (Dark Blue)
+      backgroundColor: '#1e293b', 
       backgroundImage: 'linear-gradient(to bottom right, #1e293b, #0f172a)',
       borderRadius: '16px', 
       width: '90%', maxWidth: '450px', 
-      boxShadow: '0 0 40px rgba(139, 92, 246, 0.15)', // Glow ungu tipis
+      boxShadow: '0 0 40px rgba(139, 92, 246, 0.15)', 
       border: '1px solid rgba(148, 163, 184, 0.1)',
       overflow: 'hidden',
       color: '#f8fafc'
     },
-    header: { 
-      padding: '24px 32px 10px', 
-      textAlign: 'center'
-    },
+    header: { padding: '24px 32px 10px', textAlign: 'center' },
     iconWrapper: {
       width: '48px', height: '48px', margin: '0 auto 16px',
       backgroundColor: 'rgba(139, 92, 246, 0.1)',
@@ -121,10 +121,10 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSave, onClose }) =>
     
     inputWrapper: { position: 'relative' as 'relative' },
     input: {
-      width: '100%', backgroundColor: '#0f172a', // Slate-900 (Darker)
+      width: '100%', backgroundColor: '#0f172a', 
       border: '1px solid #334155', borderRadius: '10px',
       padding: '14px 16px', color: '#fff', outline: 'none', 
-      fontSize: '0.9rem', fontFamily: '"Fira Code", monospace', // Monospace biar kayak hacker
+      fontSize: '0.9rem', fontFamily: '"Fira Code", monospace', 
       boxSizing: 'border-box',
       transition: 'border-color 0.2s, box-shadow 0.2s',
     },
@@ -138,13 +138,11 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSave, onClose }) =>
     helperText: { marginTop: '20px', fontSize: '0.8rem', color: '#64748b', textAlign: 'center' },
     link: { color: '#a78bfa', textDecoration: 'none', fontWeight: '500', cursor: 'pointer', borderBottom: '1px dotted #a78bfa' },
     
-    footer: { 
-      padding: '0 32px 32px', 
-    },
+    footer: { padding: '0 32px 32px' },
     btnSave: { 
       width: '100%',
       padding: '14px', 
-      background: 'linear-gradient(135deg, #7c3aed 0%, #db2777 100%)', // Gradient Ungu ke Pink (Linda Style)
+      background: 'linear-gradient(135deg, #7c3aed 0%, #db2777 100%)', 
       border: 'none', 
       borderRadius: '10px', color: 'white', cursor: 'pointer', fontWeight: '600', fontSize: '0.95rem',
       opacity: loading ? 0.7 : 1, 
@@ -160,7 +158,6 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSave, onClose }) =>
         
         <div style={styles.header}>
           <div style={styles.iconWrapper}>
-            {/* Icon Kunci */}
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
           </div>
           <h2 style={styles.title}>Akses Sistem</h2>
@@ -171,7 +168,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSave, onClose }) =>
           {showInfo && (
             <div style={styles.infoBox}>
               <strong>🔒 Aman & Terenkripsi</strong><br/>
-              API Key disimpan di <em>Local Storage</em> browser kamu. Tidak dikirim ke database server kami. Hanya dipakai buat ngobrol sama Google Tetapi dengan karakteristik yang bsa di aturrr.
+              API Key disimpan di <em>Local Storage</em> browser kamu. Tidak dikirim ke database server kami. Hanya dipakai buat ngobrol sama Google.
             </div>
           )}
           
