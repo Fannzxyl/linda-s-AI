@@ -509,81 +509,76 @@ async def memory_search_endpoint(payload: MemorySearch) -> dict:
         raise HTTPException(status_code=500, detail="Pencarian memori gagal.")
 
 
-@app.post("/emotion", response_model=EmotionOut, tags=["Avatar"])
+# ... (Kode atasnya biarin aja) ...
+
+# --- UPDATE BAGIAN INI BIAR LINDA PUNYA PERASAAN BENERAN ---
+@app.post("/emotion", tags=["Avatar"])
 async def emotion_endpoint(
     payload: EmotionIn,
     user_api_key: Optional[str] = Header(None, alias="X-Gemini-Api-Key")
 ) -> EmotionOut:
-    """Kembalikan state emosi JSON untuk sinkron avatar."""
-    settings_env = get_settings()
-    model = (settings_env.gemini_model or "gemini-1.5-flash").strip() 
-    
-    key = user_api_key or os.getenv("GEMINI_API_KEY")
-    
-    if not key:
-        logger.warning("API Key untuk emosi tidak ditemukan (baik di header maupun env), menggunakan fallback.")
-        return EmotionOut() # Fallback yang aman
+    """
+    Menganalisis teks terakhir untuk menentukan ekspresi wajah Avatar.
+    Menggunakan Gemini 2.5 Flash agar respon cepat.
+    """
+    if not user_api_key:
+        # Kalau gak ada key, senyum aja daripada error
+        return EmotionOut(emotion="happy", glow="#a78bfa")
 
-    persona_hint = (payload.persona or "").strip().lower()
-    
+    # Prompt khusus buat analisis emosi (output JSON Only)
     prompt = f"""
-Klasifikasikan mood dari teks berikut dan keluarkan JSON VALID saja (tanpa catatan):
-Teks: {payload.text}
-Jika persona pengguna 'tsundere', sebutkan 'tsun' saat nada ketus namun peduli.
-Skema ketat: {{ 
-  "emotion": "neutral|happy|sad|angry|tsun|excited|calm", 
-  "blink": true|false, 
-  "wink": true|false, 
-  "headSwaySpeed": number, # 0.6..1.6 
-  "glow": "#RRGGBB" 
-}}
-Aturan pewarnaan: neutral=#a78bfa, happy=#ff90c2, tsun=#f38bb3, calm=#6ea8ff, excited=#ffd166, sad=#94a3b8, angry=#fb7185.
-Persona aktif: {persona_hint if persona_hint else "tidak disebut"}.
-"""
+    Analyze the sentiment of this text spoken by an anime character named 'Linda' (Persona: {payload.persona or 'cheerful'}).
+    Text: "{payload.text}"
     
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json"},
-    }
+    Determine the best facial expression and lighting color.
+    VALID EMOTIONS: neutral, happy, sad, angry, tsun (shy/tsundere), excited, calm.
     
-    # --- FIX EMOTION ENDPOINT JUGA ---
-    # Menghapus suffix /models jika ada di base_url
-    base_url = (settings_env.gemini_base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
-    if base_url.endswith("/models"):
-        base_url = base_url.replace("/models", "")
-        
-    url = f"{base_url}/models/{model}:generateContent"
+    Return ONLY valid JSON:
+    {{
+        "emotion": "emotion_name",
+        "blink": true,
+        "wink": false, 
+        "headSwaySpeed": 1.0,
+        "glow": "#HEXCOLOR"
+    }}
+    
+    Example for 'I hate you but take this!': {{"emotion": "tsun", "blink": true, "wink": false, "headSwaySpeed": 2.5, "glow": "#fb7185"}}
+    """
+    
+    # Kita tembak langsung ke Gemini (bukan stream)
+    # Gunakan model yang sama dengan config (Gemini 2.5 Flash)
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    
     try:
-        async with httpx.AsyncClient(timeout=settings_env.request_timeout) as cli:
-            r = await cli.post(f"{url}?key={key}", json=body)
-            r.raise_for_status() 
-
-            data = r.json()
+        async with httpx.AsyncClient(timeout=5.0) as client: # Timeout cepat (5s)
+            response = await client.post(
+                url,
+                params={"key": user_api_key},
+                json={"contents": [{"parts": [{"text": prompt}]}]}
+            )
+            response.raise_for_status()
+            result = response.json()
             
-            raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            # Parsing JSON dari teks Gemini
+            text_response = result["candidates"][0]["content"]["parts"][0]["text"]
+            # Bersihkan markdown ```json ... ``` jika ada
+            clean_json = text_response.replace("```json", "").replace("```", "").strip()
             
-            if raw.startswith("```"):
-                raw = raw.strip('`').strip('json').strip()
-                
-            parsed = json.loads(raw)
+            data = json.loads(clean_json)
             
             return EmotionOut(
-                emotion=str(parsed.get("emotion", "neutral")),
-                blink=bool(parsed.get("blink", True)),
-                wink=bool(parsed.get("wink", False)),
-                headSwaySpeed=float(parsed.get("headSwaySpeed", 1.0) if isinstance(parsed.get("headSwaySpeed"), (int, float)) else 1.0),
-                glow=str(parsed.get("glow", "#a78bfa")),
+                emotion=data.get("emotion", "neutral"),
+                blink=data.get("blink", True),
+                wink=data.get("wink", False),
+                headSwaySpeed=float(data.get("headSwaySpeed", 1.0)),
+                glow=data.get("glow", "#a78bfa")
             )
             
-    except (httpx.HTTPStatusError, json.JSONDecodeError, KeyError) as e:
-        logger.error("Gagal klasifikasi emosi: Status/JSON Error - %s", e)
-        return EmotionOut()
     except Exception as e:
-        logger.exception("Gagal klasifikasi emosi (Exception tak terduga): %s", e)
-        return EmotionOut()
-
+        logger.error(f"Gagal analisis emosi: {e}")
+        # Fallback kalau error/timeout
+        return EmotionOut(emotion="neutral", glow="#a78bfa")
 
 if __name__ == "__main__":
     import uvicorn
-    # Menjalankan aplikasi dengan Uvicorn. reload=True akan aktif selama development.
     uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)

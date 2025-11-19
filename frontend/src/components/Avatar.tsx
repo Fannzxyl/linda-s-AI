@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-// Definisi Tipe Data
+// --- TIPE DATA ---
 export type Emotion = "neutral" | "happy" | "sad" | "angry" | "tsun" | "excited" | "calm";
 
 export type AvatarState = {
@@ -16,18 +16,17 @@ type Props = {
   typing?: boolean 
 };
 
-// Helper: Agar gambar terbaca di Vercel/Localhost dengan benar
+// --- ASSETS HELPER ---
 const base = (import.meta as any).env?.BASE_URL || "/";
-// Pastikan kamu punya folder "linda" di dalam folder "public"
 const asset = (name: string) => `${base}linda/${name}`;
 
-// Mapping Emosi ke File Gambar
+// --- MAPPING GAMBAR ---
 const EMOTION_SRC: Record<Emotion, string> = {
   neutral: asset("netral.png"),
   happy: asset("senyum.png"),
   sad: asset("sedih.png"),
-  angry: asset("netral.png"), // Kalau tidak ada angry.png, pakai netral
-  tsun: asset("wink.png"),    // Tsundere sering wink/malu
+  angry: asset("netral.png"), 
+  tsun: asset("wink.png"),    
   excited: asset("senyum.png"),
   calm: asset("netral.png"),
 };
@@ -38,7 +37,7 @@ const BLINK_SRC = asset("merem.png");
 export default function Avatar({ state, typing = false }: Props) {
   const frameRef = useRef<HTMLDivElement>(null);
   
-  // State untuk animasi transisi halus (Cross-fade)
+  // State Transisi
   const [backSrc, setBackSrc] = useState(EMOTION_SRC.neutral);
   const [frontSrc, setFrontSrc] = useState(EMOTION_SRC.neutral);
   const [frontShow, setFrontShow] = useState(true);
@@ -47,10 +46,9 @@ export default function Avatar({ state, typing = false }: Props) {
   const verRef = useRef(0);
   const crossFadeTimerRef = useRef<number | null>(null);
 
-  // Tentukan gambar target berdasarkan emosi
   const targetSrc = useMemo(() => EMOTION_SRC[state.emotion] ?? EMOTION_SRC.neutral, [state.emotion]);
 
-  // 1. Preload Gambar agar tidak kedip putih saat ganti ekspresi
+  // 1. Preload (Biar gak kedip putih)
   useEffect(() => {
     const preloadList = ["netral.png", "senyum.png", "sedih.png", "wink.png", "merem.png"];
     preloadList.forEach((n) => {
@@ -59,7 +57,7 @@ export default function Avatar({ state, typing = false }: Props) {
     });
   }, []);
 
-  // 2. Logika Ganti Ekspresi (Cross-Fade)
+  // 2. Logic Ganti Ekspresi (Cross-Fade)
   useEffect(() => {
     if (crossFadeTimerRef.current) {
         clearTimeout(crossFadeTimerRef.current);
@@ -73,16 +71,14 @@ export default function Avatar({ state, typing = false }: Props) {
     img.src = targetSrc;
 
     const applyChange = async () => {
-      try { await img.decode(); } catch {} // Tunggu gambar siap decode
+      try { await img.decode(); } catch {} 
       
-      if (ver !== verRef.current) return; // Cegah race condition
+      if (ver !== verRef.current) return; 
       
-      // Set gambar belakang jadi gambar depan yg sekarang (biar mulus)
       setBackSrc(frontSrc);
       setFrontSrc(targetSrc);
-      setFrontShow(false); // Sembunyikan depan sebentar buat transisi
+      setFrontShow(false); 
       
-      // Munculkan perlahan
       crossFadeTimerRef.current = setTimeout(() => {
           if (ver !== verRef.current) return;
           requestAnimationFrame(() => {
@@ -94,8 +90,6 @@ export default function Avatar({ state, typing = false }: Props) {
 
     img.onload = applyChange;
     img.onerror = () => {
-      console.error("Gagal memuat gambar:", targetSrc);
-      // Fallback ke netral kalau gambar rusak
       if (ver === verRef.current) {
           setBackSrc(EMOTION_SRC.neutral);
           setFrontSrc(EMOTION_SRC.neutral);
@@ -109,7 +103,7 @@ export default function Avatar({ state, typing = false }: Props) {
     };
   }, [targetSrc, frontSrc]);
 
-  // 3. Logika Kedip (Blink) & Wink Otomatis
+  // 3. Logic Kedip (Blink)
   useEffect(() => {
     let stopped = false;
     const timers: number[] = []; 
@@ -123,12 +117,10 @@ export default function Avatar({ state, typing = false }: Props) {
       if (stopped) return;
       
       if (state.wink) {
-        // Mode Wink (ngedip satu mata terus)
         setOverlay(WINK_SRC);
         addTimer(150, () => setOverlay(null));
         addTimer(2000, runCycle);
       } else if (state.blink) {
-        // Mode Blink (ngedip normal acak)
         const randomDelay = 2000 + Math.random() * 3000; 
         addTimer(randomDelay, () => {
           if (stopped) return; 
@@ -137,20 +129,15 @@ export default function Avatar({ state, typing = false }: Props) {
           addTimer(100, runCycle); 
         });
       } else {
-        // Kalau dimatikan blinknya
         addTimer(3000, runCycle);
       }
     };
 
     runCycle();
-
-    return () => { 
-        stopped = true; 
-        timers.forEach(clearTimeout); 
-    };
+    return () => { stopped = true; timers.forEach(clearTimeout); };
   }, [state.blink, state.wink]);
 
-  // 4. Efek Goyang Kepala (Head Sway)
+  // 4. Logic Goyang Kepala (Head Sway)
   useEffect(() => {
     const el = frameRef.current;
     if (!el) return;
@@ -158,9 +145,9 @@ export default function Avatar({ state, typing = false }: Props) {
     
     const loop = () => {
       t += 0.02 * state.headSwaySpeed; 
-      // Gerakan memutar kecil
-      const tx = Math.sin(t) * 1.5;
-      const ty = Math.cos(t / 1.5) * 1.0;
+      // Gerakan diperhalus biar gak mabok di layar kecil
+      const tx = Math.sin(t) * 1.2; 
+      const ty = Math.cos(t / 1.5) * 0.8;
       
       el.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
       raf = requestAnimationFrame(loop);
@@ -170,39 +157,71 @@ export default function Avatar({ state, typing = false }: Props) {
     return () => cancelAnimationFrame(raf); 
   }, [state.headSwaySpeed]);
 
+  // --- STYLING INLINE (Biar Kebal CSS Luar) ---
+  const styles: { [key: string]: React.CSSProperties } = {
+    frame: {
+      position: 'relative',
+      width: '100%',
+      height: '100%',
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      // overflow: 'hidden', // Opsional: aktifkan kalau goyangnya keluar batas
+    },
+    img: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: '100%',
+      objectFit: 'contain', // INI KUNCINYA: Gambar gak bakal kepotong!
+      pointerEvents: 'none', // Biar gak bisa di-drag user (jelek di HP)
+      userSelect: 'none',
+      transition: 'opacity 0.2s ease-in-out', // Transisi halus
+    },
+    glow: {
+      position: 'absolute',
+      bottom: '10%',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      width: '60%',
+      height: '20px',
+      borderRadius: '50%',
+      backgroundColor: state.glow,
+      filter: 'blur(20px)',
+      opacity: typing ? 0.6 : 0,
+      transition: 'opacity 0.3s ease',
+      zIndex: -1 // Di belakang avatar
+    }
+  };
+
   return (
-    <div className="avatar-frame" ref={frameRef}>
-      {/* Gambar Belakang (Static) */}
+    <div className="avatar-frame" ref={frameRef} style={styles.frame}>
+      {/* Glow Effect (Pindah ke belakang biar estetik) */}
+      <div style={styles.glow} />
+
+      {/* Gambar Belakang */}
       <img 
         src={backSrc} 
         alt="avatar-back" 
-        className="avatar-img back" 
-        draggable={false} 
+        style={styles.img}
       />
       
-      {/* Gambar Depan (Fade In/Out) */}
+      {/* Gambar Depan */}
       <img 
         src={frontSrc} 
         alt="avatar-front" 
-        className={`avatar-img front ${frontShow ? "show" : "hide"}`} 
-        draggable={false}
+        style={{...styles.img, opacity: frontShow ? 1 : 0}}
       />
       
-      {/* Overlay (Mata Merem/Wink) */}
+      {/* Overlay (Mata) */}
       {overlay && (
         <img 
             src={overlay} 
             alt="blink-overlay" 
-            className="avatar-overlay show" 
-            draggable={false} 
+            style={{...styles.img, zIndex: 10}}
         />
       )}
-      
-      {/* Efek Glow saat mengetik */}
-      <div 
-        className="avatar-speaking" 
-        style={{ opacity: typing ? 1 : 0, boxShadow: `0 0 20px ${state.glow}` }} 
-      />
     </div>
   );
 }

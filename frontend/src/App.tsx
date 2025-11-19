@@ -1,8 +1,7 @@
-// src/App.tsx (FINAL ONLINE VERSION)
+// src/App.tsx (FINAL BUILD: Fixed Image Persistence & UI)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-// Import Avatar PNG (Sesuai keinginanmu)
 import Avatar, { AvatarState, Emotion } from "./components/Avatar";
 import Chat, { Msg } from "./components/Chat";
 import ErrorMessage from "./components/ErrorMessage";
@@ -15,10 +14,9 @@ import { calculateMood, getMoodGreeting } from "./utils/moodSystem";
 import { parseError, getLindasErrorResponse } from "./utils/errorHandler";
 import { setupKeyboardShortcuts, ShortcutAction } from "./utils/keyboardShortcuts";
 
-/* --- PERBAIKAN LINK KE HUGGING FACE --- */
-const BASE_URL = "https://fanlley-alfan.hf.space";
-
-// Di backend Python kamu, endpoint chat ada di root (/chat), bukan (/api/chat)
+/* --- URL CONFIG --- */
+// Cek .env dulu, kalau gak ada pake localhost default
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://fanlley-alfan.hf.space";
 const CHAT_URL = `${BASE_URL}/chat`;
 const RESET_URL = `${BASE_URL}/reset`;
 const EMOTION_URL = `${BASE_URL}/emotion`;
@@ -82,7 +80,7 @@ export default function App() {
     {
       id: crypto.randomUUID(),
       role: "assistant",
-      content: "Nihaooooo!! Aku linda siap menjadi teman ngobrol mu. Tapi sebelum itu, masukkan API Key kamu dulu ya!",
+      content: "Hai! Linda di sini. Yuk ngobrol, tapi login dulu ya pake API Key biar aman!",
     },
   ]);
 
@@ -101,12 +99,14 @@ export default function App() {
     [messages, lastInteraction, moodEnabled]
   );
 
+  // --- LOGIKA BEGAL (Auth Wall) ---
   useEffect(() => {
     if (!apiKey) {
       setIsApiKeyModalOpen(true);
     }
   }, [apiKey]);
 
+  // Keyboard shortcuts
   useEffect(() => {
     const handleShortcut = (action: ShortcutAction) => {
       switch (action) {
@@ -120,6 +120,7 @@ export default function App() {
     return setupKeyboardShortcuts(handleShortcut);
   }, [messages, styleName, apiKey]);
 
+  // Greeting otomatis
   useEffect(() => {
     const hoursSinceLastChat = (Date.now() - lastInteraction) / (1000 * 60 * 60);
     if (hoursSinceLastChat > 6 && moodEnabled && messages.length > 1) {
@@ -138,6 +139,18 @@ export default function App() {
   };
 
   const openApiKeyModal = () => setIsApiKeyModalOpen(true);
+
+  // --- FITUR RESET TOTAL ---
+  const handleHardReset = () => {
+    if (window.confirm("Yakin mau reset total? Chat hilang & API Key kehapus lho.")) {
+      localStorage.removeItem('geminiApiKey');
+      localStorage.removeItem('chatHistory');
+      localStorage.removeItem('styleName');
+      localStorage.removeItem('moodEnabled');
+      localStorage.clear(); 
+      window.location.reload();
+    }
+  };
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -164,21 +177,37 @@ export default function App() {
 
   function handleRetry() { setError(null); onSend(); }
 
+  // --- FUNGSI KIRIM PESAN (CORE LOGIC) ---
   async function onSend() {
     if (!apiKey) { setIsApiKeyModalOpen(true); return; }
     const text = input.trim();
     if ((!text && !imageBase64) || sending) return; 
-    setInput(""); setSending(true); setTyping(true); setError(null); setLastInteraction(Date.now());
+    
+    // 1. Simpan state gambar SEBELUM di-reset
     const currentImageBase64 = imageBase64;
     const currentImagePreviewUrl = imagePreviewUrl;
+
+    // 2. Reset UI
+    setInput(""); setSending(true); setTyping(true); setError(null); setLastInteraction(Date.now());
     setImageBase64(null); setImagePreviewUrl(null); 
     if(fileInputRef.current) fileInputRef.current.value = ''; 
     
-    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: text || "(Gambar)", image_url: currentImagePreviewUrl };
+    // 3. Buat Pesan User (FIX: Gunakan Base64 untuk image_url, BUKAN PreviewUrl)
+    const userMsg: Msg = { 
+      id: crypto.randomUUID(), 
+      role: "user", 
+      content: text || "(Gambar)", 
+      image_url: currentImageBase64 // <-- INI PERBAIKANNYA (Biar gambar awet)
+    };
+    
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
 
-    const history = updatedMessages.filter((x) => x.role !== "system").map(({ role, content }) => ({ role, content })); 
+    // 4. Siapkan Payload Backend (Filter pesan kosong biar gak error 422)
+    const history = updatedMessages
+      .filter((x) => x.role !== "system" && x.content.trim() !== "") 
+      .map(({ role, content }) => ({ role, content })); 
+    
     let finalText = "";
     try {
       const headers = { "Content-Type": "application/json", "Accept": "text/event-stream", "X-Gemini-Api-Key": apiKey };
@@ -262,7 +291,6 @@ export default function App() {
           <div className="avatar-card">
             <div className="avatar-glow" />
             <div className="avatar-canvas">
-              {/* AVATAR PNG BIASA */}
               <Avatar state={avatar} typing={typing} />
             </div>
           </div>
@@ -277,7 +305,15 @@ export default function App() {
               <button className="pill pill-secondary" onClick={() => handleExport('json')}>📥 Export</button>
             </div>
           </div>
-          {showSettings && <SettingsPanel moodEnabled={moodEnabled} onMoodToggle={setMoodEnabled} onApiKeyChangeClick={openApiKeyModal} showShortcuts={true} />}
+          {showSettings && (
+            <SettingsPanel 
+              moodEnabled={moodEnabled} 
+              onMoodToggle={setMoodEnabled} 
+              onApiKeyChangeClick={openApiKeyModal} 
+              onHardReset={handleHardReset} 
+              showShortcuts={true} 
+            />
+          )}
           {showStats && <ChatStats messages={messages} />}
         </aside>
         <section className="chat">
