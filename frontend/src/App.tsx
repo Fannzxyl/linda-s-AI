@@ -309,7 +309,13 @@ export default function App() {
               showShortcuts={true} 
             />
           )}
-          {showStats && <ChatStats messages={messages} />}
+          
+          {showStats && (
+            <ChatStats 
+              messages={messages} 
+              onClose={() => setShowStats(false)} // <-- Tambah ini biar bisa ditutup
+            />
+          )}
         </aside>
 
         <section className="chat">

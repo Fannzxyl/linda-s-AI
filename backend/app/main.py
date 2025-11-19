@@ -512,20 +512,23 @@ async def memory_search_endpoint(payload: MemorySearch) -> dict:
 # ... (Kode atasnya biarin aja) ...
 
 # --- UPDATE BAGIAN INI BIAR LINDA PUNYA PERASAAN BENERAN ---
+# backend/app/main.py (Bagian Bawah)
+
+# ... (kode atas tetap sama) ...
+
 @app.post("/emotion", tags=["Avatar"])
 async def emotion_endpoint(
     payload: EmotionIn,
     user_api_key: Optional[str] = Header(None, alias="X-Gemini-Api-Key")
 ) -> EmotionOut:
     """
-    Menganalisis teks terakhir untuk menentukan ekspresi wajah Avatar.
-    Menggunakan Gemini 2.5 Flash agar respon cepat.
+    Menganalisis teks untuk ekspresi wajah.
+    Punya mekanisme Fallback: Coba 2.5 -> Gagal? -> Coba 1.5.
     """
     if not user_api_key:
-        # Kalau gak ada key, senyum aja daripada error
         return EmotionOut(emotion="happy", glow="#a78bfa")
 
-    # Prompt khusus buat analisis emosi (output JSON Only)
+    # Prompt analisis
     prompt = f"""
     Analyze the sentiment of this text spoken by an anime character named 'Linda' (Persona: {payload.persona or 'cheerful'}).
     Text: "{payload.text}"
@@ -542,42 +545,59 @@ async def emotion_endpoint(
         "glow": "#HEXCOLOR"
     }}
     
-    Example for 'I hate you but take this!': {{"emotion": "tsun", "blink": true, "wink": false, "headSwaySpeed": 2.5, "glow": "#fb7185"}}
+    Example: {{"emotion": "tsun", "blink": true, "wink": false, "headSwaySpeed": 2.5, "glow": "#fb7185"}}
     """
     
-    # Kita tembak langsung ke Gemini (bukan stream)
-    # Gunakan model yang sama dengan config (Gemini 2.5 Flash)
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    # --- DAFTAR MODEL CADANGAN ---
+    # Kita coba 2.5 dulu, kalau 503/Error, lari ke 1.5 (Lebih Stabil)
+    candidate_models = [
+        "gemini-2.5-flash", 
+        "gemini-1.5-flash", 
+        "gemini-1.5-flash-8b"
+    ]
     
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client: # Timeout cepat (5s)
-            response = await client.post(
-                url,
-                params={"key": user_api_key},
-                json={"contents": [{"parts": [{"text": prompt}]}]}
-            )
-            response.raise_for_status()
-            result = response.json()
-            
-            # Parsing JSON dari teks Gemini
-            text_response = result["candidates"][0]["content"]["parts"][0]["text"]
-            # Bersihkan markdown ```json ... ``` jika ada
-            clean_json = text_response.replace("```json", "").replace("```", "").strip()
-            
-            data = json.loads(clean_json)
-            
-            return EmotionOut(
-                emotion=data.get("emotion", "neutral"),
-                blink=data.get("blink", True),
-                wink=data.get("wink", False),
-                headSwaySpeed=float(data.get("headSwaySpeed", 1.0)),
-                glow=data.get("glow", "#a78bfa")
-            )
-            
-    except Exception as e:
-        logger.error(f"Gagal analisis emosi: {e}")
-        # Fallback kalau error/timeout
-        return EmotionOut(emotion="neutral", glow="#a78bfa")
+    base_url = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    for model in candidate_models:
+        url = f"{base_url}/{model}:generateContent"
+        
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client: # Timeout cepat aja
+                response = await client.post(
+                    url,
+                    params={"key": user_api_key},
+                    json={"contents": [{"parts": [{"text": prompt}]}]}
+                )
+                
+                # Kalau 503 (Server Busy) atau 404, lanjut ke model berikutnya
+                if response.status_code in [503, 500, 404, 429]:
+                    logger.warning(f"Emotion: Model {model} error {response.status_code}. Mencoba backup...")
+                    continue
+                
+                response.raise_for_status()
+                result = response.json()
+                
+                # Parsing JSON
+                text_response = result["candidates"][0]["content"]["parts"][0]["text"]
+                clean_json = text_response.replace("```json", "").replace("```", "").strip()
+                data = json.loads(clean_json)
+                
+                # Sukses! Kembalikan hasil
+                return EmotionOut(
+                    emotion=data.get("emotion", "neutral"),
+                    blink=data.get("blink", True),
+                    wink=data.get("wink", False),
+                    headSwaySpeed=float(data.get("headSwaySpeed", 1.0)),
+                    glow=data.get("glow", "#a78bfa")
+                )
+                
+        except Exception as e:
+            logger.warning(f"Gagal analisis emosi pakai {model}: {e}")
+            continue # Coba model selanjutnya
+
+    # Kalau semua model gagal, senyum aja :)
+    logger.error("Semua model emotion gagal. Fallback ke default.")
+    return EmotionOut(emotion="neutral", glow="#a78bfa")
 
 if __name__ == "__main__":
     import uvicorn
