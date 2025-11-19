@@ -6,10 +6,9 @@ type Props = {
   onMoodToggle: (enabled: boolean) => void;
   onApiKeyChangeClick: () => void;
   onHardReset: () => void;
-  
   styleName: string;
   onStyleChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
-  onClose: () => void; 
+  onClose: () => void;
   showShortcuts?: boolean;
 };
 
@@ -24,192 +23,166 @@ export default function SettingsPanel({
   showShortcuts = true 
 }: Props) {
 
-  // --- STYLING: MODAL MELAYANG (POP-UP) ---
-  const styles: { [key: string]: React.CSSProperties } = {
-    // 1. Overlay Gelap (Background Belakang)
-    overlay: {
-      position: 'fixed',
-      top: 0, left: 0, right: 0, bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.8)', // Gelap transparan
-      backdropFilter: 'blur(5px)', // Blur chat di belakang
-      zIndex: 9999, // Paling atas
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '20px'
-    },
-    // 2. Kotak Panel Setting
-    panel: {
-      backgroundColor: '#0f172a', // Solid Dark Blue
-      border: '1px solid rgba(255, 255, 255, 0.1)',
-      borderRadius: '24px',
-      width: '100%',
-      maxWidth: '420px', // Batasi lebar biar rapi di Desktop
-      maxHeight: '90vh', // Jangan lebih tinggi dari layar
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '12px',
-      padding: '24px',
-      color: '#f8fafc',
-      overflowY: 'auto', // Scroll kalau kepanjangan
-      boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
-      position: 'relative'
-    },
-    headerRow: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      marginBottom: '16px',
-      paddingBottom: '16px',
-      borderBottom: '1px solid rgba(255,255,255,0.1)'
-    },
-    headerTitle: {
-      fontWeight: '800',
-      color: '#a78bfa',
-      textTransform: 'uppercase',
-      letterSpacing: '1px',
-      fontSize: '1rem',
-      display: 'flex', alignItems: 'center', gap: '8px'
-    },
-    closeBtn: {
-      background: 'rgba(255,255,255,0.1)',
-      border: 'none',
-      color: '#fff',
-      width: '36px', height: '36px',
-      borderRadius: '50%',
-      cursor: 'pointer',
-      display: 'grid', placeItems: 'center',
-      fontSize: '1.2rem',
-      transition: '0.2s'
-    },
-    card: {
-      backgroundColor: 'rgba(30, 41, 59, 0.5)',
-      border: '1px solid rgba(255, 255, 255, 0.05)',
-      borderRadius: '16px',
-      padding: '16px',
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-    },
-    select: {
-      backgroundColor: '#020617',
-      color: 'white',
-      border: '1px solid #334155',
-      padding: '8px 12px',
-      borderRadius: '8px',
-      outline: 'none',
-      fontSize: '0.9rem',
-      cursor: 'pointer',
-      minWidth: '130px'
-    },
-    cardDanger: {
-      backgroundColor: 'rgba(239, 68, 68, 0.05)', 
-      border: '1px dashed rgba(239, 68, 68, 0.2)',
-      borderRadius: '16px',
-      padding: '16px',
-      marginTop: '8px'
-    },
-    info: { flex: 1, paddingRight: '12px' },
-    label: { display: 'block', fontSize: '0.9rem', fontWeight: '600', marginBottom: '4px', color: '#f1f5f9' },
-    desc: { fontSize: '0.75rem', color: '#94a3b8', lineHeight: '1.3' },
-    
-    toggleLabel: { position: 'relative', display: 'inline-block', width: '44px', height: '24px', cursor: 'pointer' },
-    toggleInput: { opacity: 0, width: 0, height: 0 },
-    toggleSlider: { position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#334155', transition: '.3s', borderRadius: '34px' },
-    toggleSliderActive: { backgroundColor: '#8b5cf6' },
-    toggleKnob: { position: 'absolute', content: '""', height: '18px', width: '18px', left: '3px', bottom: '3px', backgroundColor: 'white', transition: '.3s', borderRadius: '50%' },
-    toggleKnobActive: { transform: 'translateX(20px)' },
-    
-    btnSecondary: { backgroundColor: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0', padding: '8px 14px', borderRadius: '8px', fontSize: '0.8rem', cursor: 'pointer', fontWeight: '600' },
-    btnDanger: { backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.5)', color: '#fca5a5', padding: '8px 14px', borderRadius: '8px', fontSize: '0.8rem', cursor: 'pointer', fontWeight: '600' },
-    
-    shortcutsContainer: { marginTop: '12px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.05)' },
-    shortcutRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '0.8rem', color: '#cbd5e1' },
-    kbd: { backgroundColor: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '2px 6px', fontFamily: 'monospace', fontSize: '0.75rem', color: '#a78bfa' }
-  };
-
   return (
-    <div style={styles.overlay} onClick={onClose}>
-      {/* Stop Propagation biar klik di dalam panel gak nutup modal */}
-      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
+    <>
+      {/* --- CSS KHUSUS BUAT SETTINGS (RESPONSIF) --- */}
+      <style>{`
+        /* 1. OVERLAY (Latar Belakang Gelap) */
+        .settings-overlay {
+          position: fixed;
+          top: 0; left: 0; width: 100vw; height: 100vh;
+          background-color: rgba(0, 0, 0, 0.6);
+          backdrop-filter: blur(8px);
+          z-index: 9999;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          opacity: 0;
+          animation: fadeIn 0.2s forwards;
+        }
+
+        /* 2. MODAL BOX (Kotak Settingnya) */
+        .settings-modal {
+          background-color: #0f172a;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          width: 100%;
+          max-width: 400px; /* Lebar maksimal di Desktop */
+          max-height: 85vh; /* Jangan mentok atas bawah */
+          border-radius: 24px;
+          padding: 24px;
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+          box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+          transform: scale(0.95);
+          opacity: 0;
+          animation: popIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          overflow-y: auto;
+        }
+
+        /* Sembunyikan Scrollbar tapi tetep bisa scroll */
+        .settings-modal::-webkit-scrollbar { display: none; }
+
+        /* 3. RESPONSIVE MOBILE (Tampilan HP) */
+        @media (max-width: 768px) {
+          .settings-overlay {
+            align-items: flex-end; /* Tempel ke bawah */
+            background-color: rgba(0, 0, 0, 0.8); /* Lebih gelap */
+          }
+          
+          .settings-modal {
+            max-width: 100%;
+            height: 90vh; /* Hampir full layar */
+            max-height: 90vh;
+            border-radius: 24px 24px 0 0; /* Lengkung atas doang */
+            border: none;
+            border-top: 1px solid rgba(255,255,255,0.15);
+            animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          }
+        }
+
+        /* 4. ANIMASI */
+        @keyframes fadeIn { to { opacity: 1; } }
+        @keyframes popIn { to { opacity: 1; transform: scale(1); } }
+        @keyframes slideUp { from { transform: translateY(100%); opacity: 1; } to { transform: translateY(0); opacity: 1; } }
+
+        /* 5. KOMPONEN KECIL */
+        .st-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .st-title { font-weight: 800; color: #a78bfa; letter-spacing: 1px; font-size: 0.9rem; display: flex; gap: 8px; align-items: center; }
+        .st-close { background: rgba(255,255,255,0.1); border: none; color: white; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; display: grid; place-items: center; font-size: 1.2rem; transition: 0.2s; }
+        .st-close:hover { background: rgba(255,255,255,0.2); transform: rotate(90deg); }
         
-        <div style={styles.headerRow}>
-          <div style={styles.headerTitle}><span>⚙️</span> PENGATURAN</div>
-          <button style={styles.closeBtn} onClick={onClose}>&times;</button>
-        </div>
+        .st-card { background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255,255,255,0.05); border-radius: 16px; padding: 14px; display: flex; justify-content: space-between; align-items: center; }
+        .st-card.danger { background: rgba(239, 68, 68, 0.05); border-color: rgba(239, 68, 68, 0.2); }
         
-        {/* CARD 1: GAYA BICARA */}
-        <div style={styles.card}>
-          <div style={styles.info}>
-            <label style={styles.label}>Gaya Bicara</label>
-            <p style={styles.desc}>Pilih kepribadian Linda.</p>
-          </div>
-          <select style={styles.select} value={styleName} onChange={onStyleChange}>
-            <option>Tsundere</option>
-            <option>Yandere</option>
-            <option>Ceria</option>
-            <option>Santai</option>
-            <option>Formal</option>
-            <option>Netral</option>
-          </select>
-        </div>
+        .st-label { display: block; font-size: 0.85rem; font-weight: 600; color: #f1f5f9; margin-bottom: 2px; }
+        .st-desc { font-size: 0.75rem; color: #94a3b8; }
+        
+        .st-select { background: #020617; color: white; border: 1px solid #334155; padding: 8px 12px; border-radius: 8px; outline: none; font-size: 0.85rem; }
+        .st-btn { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #e2e8f0; padding: 6px 12px; border-radius: 8px; font-size: 0.75rem; font-weight: 600; cursor: pointer; }
+        .st-btn.danger { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }
 
-        {/* CARD 2: MOOD */}
-        <div style={styles.card}>
-          <div style={styles.info}>
-            <label style={styles.label}>Mood Dinamis</label>
-            <p style={styles.desc}>Linda bisa baperan.</p>
-          </div>
-          <label style={styles.toggleLabel}>
-            <input type="checkbox" checked={moodEnabled} onChange={(e) => onMoodToggle(e.target.checked)} style={styles.toggleInput} />
-            <span style={{...styles.toggleSlider, ...(moodEnabled ? styles.toggleSliderActive : {})}}>
-              <span style={{...styles.toggleKnob, ...(moodEnabled ? styles.toggleKnobActive : {})}} />
-            </span>
-          </label>
-        </div>
+        /* Toggle Switch CSS */
+        .toggle-switch { position: relative; width: 40px; height: 22px; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #334155; transition: .3s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; }
+        input:checked + .slider { background-color: #8b5cf6; }
+        input:checked + .slider:before { transform: translateX(18px); }
+      `}</style>
 
-        {/* CARD 3: API KEY */}
-        <div style={styles.card}>
-          <div style={styles.info}>
-            <label style={styles.label}>Koneksi API</label>
-            <p style={styles.desc}>Ganti kunci Gemini.</p>
+      <div className="settings-overlay" onClick={onClose}>
+        <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
+          
+          {/* HEADER */}
+          <div className="st-header">
+            <div className="st-title"><span>⚙️</span> PENGATURAN</div>
+            <button className="st-close" onClick={onClose}>&times;</button>
           </div>
-          <button style={styles.btnSecondary} onClick={onApiKeyChangeClick}>Ganti</button>
-        </div>
 
-        {/* CARD 4: DANGER */}
-        <div style={styles.cardDanger}>
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-            <div style={styles.info}>
-              <label style={{...styles.label, color: '#fca5a5'}}>Zona Bahaya</label>
-              <p style={{...styles.desc, color: '#f87171'}}>Reset semua data.</p>
-            </div>
-            <button style={styles.btnDanger} onClick={onHardReset}>Reset</button>
-          </div>
-        </div>
-
-        {/* SHORTCUTS */}
-        {showShortcuts && (
-          <div style={styles.shortcutsContainer}>
-            <h4 style={{...styles.label, marginBottom: '12px', color: '#94a3b8', fontSize: '0.75rem'}}>SHORTCUTS</h4>
+          {/* CARD 1: GAYA BICARA */}
+          <div className="st-card">
             <div>
-              {SHORTCUTS_HELP.map((shortcut, i) => (
-                <div key={i} style={styles.shortcutRow}>
-                  <span>{shortcut.action}</span>
-                  <div style={{display: 'flex', gap: '4px'}}>
-                    {shortcut.keys.split('+').map((k, idx) => (
-                      <span key={idx}>
-                        <kbd style={styles.kbd}>{k.trim()}</kbd>
-                        {idx < shortcut.keys.split('+').length - 1 && <span style={{color:'#64748b'}}>+</span>}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
+              <label className="st-label">Gaya Bicara</label>
+              <span className="st-desc">Kepribadian Linda.</span>
             </div>
+            <select className="st-select" value={styleName} onChange={onStyleChange}>
+              <option>Tsundere</option>
+              <option>Yandere</option>
+              <option>Ceria</option>
+              <option>Santai</option>
+              <option>Formal</option>
+              <option>Netral</option>
+            </select>
           </div>
-        )}
+
+          {/* CARD 2: MOOD */}
+          <div className="st-card">
+            <div>
+              <label className="st-label">Mood Dinamis</label>
+              <span className="st-desc">Linda bisa baperan.</span>
+            </div>
+            <label className="toggle-switch">
+              <input type="checkbox" checked={moodEnabled} onChange={(e) => onMoodToggle(e.target.checked)} />
+              <span className="slider"></span>
+            </label>
+          </div>
+
+          {/* CARD 3: API KEY */}
+          <div className="st-card">
+            <div>
+              <label className="st-label">Koneksi API</label>
+              <span className="st-desc">Ganti kunci Gemini.</span>
+            </div>
+            <button className="st-btn" onClick={onApiKeyChangeClick}>Ganti</button>
+          </div>
+
+          {/* CARD 4: DANGER */}
+          <div className="st-card danger">
+            <div>
+              <label className="st-label" style={{color:'#fca5a5'}}>Zona Bahaya</label>
+              <span className="st-desc" style={{color:'#f87171'}}>Reset semua data.</span>
+            </div>
+            <button className="st-btn danger" onClick={onHardReset}>Reset</button>
+          </div>
+
+          {/* SHORTCUTS */}
+          {showShortcuts && (
+            <div style={{marginTop: '10px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '10px'}}>
+              <h4 style={{fontSize: '0.7rem', color: '#94a3b8', marginBottom: '8px', textTransform:'uppercase'}}>Shortcuts</h4>
+              <div style={{display:'grid', gap:'6px'}}>
+                {SHORTCUTS_HELP.map((s, i) => (
+                  <div key={i} style={{display:'flex', justifyContent:'space-between', fontSize:'0.75rem', color:'#cbd5e1'}}>
+                    <span>{s.action}</span>
+                    <span style={{fontFamily:'monospace', color:'#a78bfa', background:'rgba(0,0,0,0.3)', padding:'2px 6px', borderRadius:'4px'}}>{s.keys}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+        </div>
       </div>
-    </div>
+    </>
   );
 }
