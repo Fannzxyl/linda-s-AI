@@ -5,6 +5,8 @@ import json
 import logging
 import re
 import base64
+import time
+from datetime import datetime # <--- TAMBAHAN PENTING
 from io import BytesIO
 from typing import AsyncGenerator, Dict, List, Tuple, Optional, Any
 
@@ -14,9 +16,14 @@ from PIL import Image
 from app.config import get_settings
 from app.schemas import Message
 
-# Matikan log cerewet httpx
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# --- IMPORT FITUR SEARCH ---
+try:
+    from app.services.search import search_google
+except ImportError:
+    logging.warning("Modul search_google tidak ditemukan. Fitur browsing dimatikan.")
+    def search_google(q): return ""
 
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 _CONNECTED_FLAG = False
 
@@ -80,16 +87,16 @@ def _build_payload(
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
         "generationConfig": {
-            "temperature": 0.8,
-            "topP": 0.9,
+            "temperature": 0.7, # Agak serius dikit biar gak halu
+            "topP": 0.95,
             "topK": 40,
-            "maxOutputTokens": 8192, # 2.5 Flash kuat banget, kasih max token gede!
+            "maxOutputTokens": 8192,
             "responseMimeType": "text/plain",
         },
     }
 
 # ==============================================================================
-#                           CORE FUNCTION (ONLY 2.5 FLASH)
+#                           CORE FUNCTION (SMART SEARCH)
 # ==============================================================================
 
 async def call_gemini_stream(
@@ -107,10 +114,46 @@ async def call_gemini_stream(
     if not final_api_key:
         raise ValueError("API Key kosong! Masukkan di Frontend atau .env")
 
-    # --- HANYA 2.5 FLASH (NO FALLBACK) ---
-    # Karena kamu yakin akunmu support, kita gaspol aja!
+    # --- 1. SUNTIK TANGGAL HARI INI ---
+    # Biar Linda sadar waktu
+    today = datetime.now().strftime("%A, %d %B %Y")
+    time_context = f"\n[INFO WAKTU SAAT INI]: {today}. Jika user bertanya tentang 'sekarang' atau 'terbaru', gunakan tanggal ini sebagai acuan."
+    system_prompt += time_context
+
+    # --- 2. LOGIKA SEARCH (MATA-MATA INTERNET) ---
+    last_user_msg = messages[-1].content.lower() if messages else ""
+    
+    # Trigger words diperbanyak
+    trigger_words = ["siapa", "kapan", "dimana", "berita", "terbaru", "skor", "cuaca", "harga", "cari", "search", "info", "presiden", "pemilu", "juara"]
+    
+    should_search = any(word in last_user_msg for word in trigger_words) and not image_base64
+    
+    if should_search:
+        search_context = search_google(last_user_msg)
+        if search_context:
+            logger.info("🔍 Info internet ditemukan, memaksa Linda baca...")
+            
+            # --- UPDATE: PROMPT LEBIH GALAK ---
+            # Kita taruh hasil search di PALING ATAS instruksi biar dibaca duluan
+            search_instruction = f"""
+            !!! DATA INTERNET TERBARU (REAL-TIME) !!!
+            {search_context}
+            
+            INSTRUKSI PENTING:
+            1. Gunakan data di atas untuk menjawab pertanyaan user.
+            2. Data di atas LEBIH AKURAT daripada ingatanmu sendiri.
+            3. Jika data di atas bilang Presiden adalah Prabowo, MAKA JAWAB PRABOWO (abaikan ingatan lamamu tentang Jokowi).
+            4. Jawab tetap dengan gaya persona yang aktif.
+            """
+            system_prompt = search_instruction + "\n\n" + system_prompt
+
+    # --- 3. DAFTAR MODEL ---
     candidate_models = [
         ("gemini-2.5-flash", "v1beta"),     
+        ("gemini-1.5-flash", "v1beta"),     
+        ("gemini-1.5-flash", "v1"),         
+        ("gemini-1.5-flash-8b", "v1beta"),  
+        ("gemini-1.5-pro", "v1beta"),       
     ]
     
     payload = _build_payload(messages, system_prompt, image_base64)
@@ -127,22 +170,21 @@ async def call_gemini_stream(
             async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
                 async with client.stream("POST", url, params=params, json=payload) as response:
                     
-                    if response.status_code == 404:
-                        # Kalau 2.5 gak nemu, coba variasi namanya (kadang Google ganti nama diem-diem)
-                        logger.warning(f"Model {model_name} 404. Mencoba variasi nama lain...")
-                        # Fallback darurat kalau nama resminya beda
-                        url = f"{base_url}/gemini-2.5-flash-preview:streamGenerateContent"
-                        # (Lanjut logika di bawah, ini cuma simulasi retry di loop)
+                    status = response.status_code
+                    
+                    if status == 404:
+                        logger.warning(f"Model {model_name} 404. Skip.")
                         continue 
                     
-                    if response.status_code == 429:
-                        logger.warning(f"Model {model_name} Overload (429).")
-                        last_error = "Kuota Habis / Server Penuh (429)"
+                    if status == 429 or status >= 500:
+                        logger.warning(f"Model {model_name} {status}. Istirahat 1 detik...")
+                        await asyncio.sleep(1)
+                        last_error = f"Server Error ({status})"
                         continue
 
-                    if response.status_code == 401:
+                    if status == 401:
                         raise httpx.HTTPStatusError("API Key Salah/Expired.", request=response.request, response=response)
-                    
+
                     response.raise_for_status()
                     
                     aggregated_raw = ""
@@ -178,13 +220,14 @@ async def call_gemini_stream(
             last_error = str(exc)
             logger.warning(f"Error koneksi ke {model_name}: {exc}")
 
-    # Kalau gagal
-    raise RuntimeError(f"Gagal pakai Gemini 2.5 Flash. Error: {last_error}")
+    error_msg = str(last_error)
+    if "429" in error_msg:
+        raise RuntimeError("Kuota API Key habis (429). Ganti key baru!")
+    
+    raise RuntimeError(f"Gagal menghubungi semua model Gemini. Terakhir: {error_msg}")
 
-# ==============================================================================
-#                           INTERNAL UTILS
-# ==============================================================================
-
+# ... (Sisa fungsi internal di bawah tetap sama, gak perlu diubah) ...
+# Pastikan fungsi _read_sse_payloads, _compute_delta, dll tetap ada di bawah sini
 async def _read_sse_payloads(response: httpx.Response) -> AsyncGenerator[str, None]:
     buffer = []
     async for raw_line in response.aiter_lines():

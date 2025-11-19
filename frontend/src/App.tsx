@@ -15,7 +15,7 @@ import { parseError, getLindasErrorResponse } from "./utils/errorHandler";
 import { setupKeyboardShortcuts, ShortcutAction } from "./utils/keyboardShortcuts";
 
 /* --- URL CONFIG --- */
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://fanlley-alfan.hf.space";
 const CHAT_URL = `${BASE_URL}/chat`;
 const RESET_URL = `${BASE_URL}/reset`;
 const EMOTION_URL = `${BASE_URL}/emotion`;
