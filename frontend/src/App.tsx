@@ -50,7 +50,8 @@ function toPersona(s: string) {
 
 function autoResize(el: HTMLTextAreaElement) {
   el.style.height = "auto";
-  el.style.height = Math.min(el.scrollHeight, 160) + "px";
+  // Ganti 160 jadi 120 biar sama kayak CSS
+  el.style.height = Math.min(el.scrollHeight, 120) + "px"; 
 }
 
 /* APP */

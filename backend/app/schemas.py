@@ -11,8 +11,7 @@ class MessageRole(str, Enum):
 # --- MODEL PESAN TUNGGAL ---
 class Message(BaseModel):
     role: MessageRole
-    # UPGRADE: max_length dihapus/digedein karena Gemini context-nya besar (1M+ token).
-    # Kita set limit longgar aja biar server gak meledak kena spam.
+    # Limit longgar biar bisa nerima teks panjang
     content: str = Field(..., min_length=1, max_length=100_000)
 
     @field_validator("content")
@@ -30,7 +29,7 @@ class ChatRequest(BaseModel):
     persona: Optional[str] = Field("ceria", description="ID Persona (ceria, tsundere, dll).")
     use_memory: bool = Field(default=False, description="Aktifkan memori jangka panjang (RAG).")
     
-    # UPGRADE MULTIMODAL: Field khusus buat nerima gambar
+    # Field khusus buat nerima gambar (Multimodal)
     image_base64: Optional[str] = Field(
         None, 
         description="String Base64 gambar. Bisa format raw atau dengan data URI scheme."
@@ -52,3 +51,15 @@ class MemoryUpsert(BaseModel):
 class MemorySearch(BaseModel):
     query: str = Field(..., min_length=1, max_length=500)
     top_k: int = Field(5, ge=1, le=50, description="Jumlah memori yang diambil.")
+
+# --- MODEL EMOSI / AVATAR (INI YANG TADI KURANG) ---
+class EmotionIn(BaseModel):
+    text: str = Field(..., description="Teks terakhir untuk dianalisis emosinya.")
+    persona: Optional[str] = Field("ceria", description="Persona aktif saat ini.")
+
+class EmotionOut(BaseModel):
+    emotion: str = Field("neutral", description="Ekspresi wajah (happy, sad, angry, tsun, excited, calm).")
+    blink: bool = Field(True, description="Apakah mata berkedip?")
+    wink: bool = Field(False, description="Apakah mata mengedip sebelah?")
+    headSwaySpeed: float = Field(1.0, description="Kecepatan goyang kepala.")
+    glow: str = Field("#a78bfa", description="Warna aura/glow background.")

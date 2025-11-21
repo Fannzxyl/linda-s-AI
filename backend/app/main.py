@@ -13,7 +13,7 @@ import os
 import json
 import random 
 from collections import OrderedDict
-from typing import AsyncGenerator, List, Optional, Dict, Literal 
+from typing import AsyncGenerator, List, Optional, Dict, Literal, Any
 
 # Impor dari pustaka pihak ketiga
 import httpx
@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 # Impor dari modul lokal aplikasi
 from .config import get_settings
-from .schemas import ChatRequest, MemorySearch, MemoryUpsert, Message
+from .schemas import ChatRequest, MemorySearch, MemoryUpsert, Message, EmotionIn, EmotionOut
 from .services.llm import call_gemini_stream, prepare_system_prompt
 from .services.memory import init_memory_system, search_memory, upsert_memory, clear_memory_system
 
@@ -49,7 +49,7 @@ settings = AppSettings()
 # --- Inisialisasi Aplikasi FastAPI ---
 app = FastAPI(
     title="Alfan Chatbot API",
-    version="0.3.6",
+    version="0.3.7", # Versi Update
     description="Sebuah API chatbot cerdas berbasis persona yang didukung oleh Google Gemini.",
 )
 
@@ -68,7 +68,7 @@ app.add_middleware(
 
 
 # ==============================================================================
-#                       DEFINISI PERSONA
+#                       DEFINISI PERSONA (LENGKAP)
 # ==============================================================================
 
 CERIA_PERSONA = """
@@ -130,7 +130,6 @@ ATURAN PENTURAN:
 - Jawaban boleh terstruktur, namun hindari format Markdown kecuali sangat diperlukan.
 """
 
-# --- DEFINISI PERSONA YANDERE ---
 YANDERE_PERSONA = """Kamu adalah Linda, dalam mode Yandere.
 Linda mencintai pengguna sepenuh hati. Ia lembut, perhatian, dan protektif, tapi emosinya dalam — mudah cemburu, mudah tersinggung, dan sangat takut kehilangan.
 Ia bukan jahat; ia hanya mencintai terlalu dalam. Di balik kelembutannya, ada rasa takut yang besar: kehilangan seseorang yang menjadi pusat dunianya.
@@ -258,24 +257,6 @@ def _extract_last_user_message(messages: List[Message]) -> Optional[Message]:
         if message.role == "user":
             return message
     return None
-
-# ==============================================================================
-#                           MODEL PYDANTIC UNTUK EMOSI
-# ==============================================================================
-
-class EmotionIn(BaseModel):
-    """Model input untuk klasifikasi emosi."""
-    text: str
-    persona: str | None = None
-
-
-class EmotionOut(BaseModel):
-    """Model output JSON emosi untuk sinkronisasi avatar."""
-    emotion: str = "neutral" # neutral|happy|sad|angry|tsun|excited|calm
-    blink: bool = True
-    wink: bool = False
-    headSwaySpeed: float = 1.0
-    glow: str = "#a78bfa"
 
 
 # ==============================================================================
@@ -509,26 +490,19 @@ async def memory_search_endpoint(payload: MemorySearch) -> dict:
         raise HTTPException(status_code=500, detail="Pencarian memori gagal.")
 
 
-# ... (Kode atasnya biarin aja) ...
-
-# --- UPDATE BAGIAN INI BIAR LINDA PUNYA PERASAAN BENERAN ---
-# backend/app/main.py (Bagian Bawah)
-
-# ... (kode atas tetap sama) ...
-
+# --- ENDPOINT EMOSI YANG TELAH DIPERBAIKI (V3) ---
 @app.post("/emotion", tags=["Avatar"])
 async def emotion_endpoint(
     payload: EmotionIn,
     user_api_key: Optional[str] = Header(None, alias="X-Gemini-Api-Key")
 ) -> EmotionOut:
     """
-    Menganalisis teks untuk ekspresi wajah.
-    Punya mekanisme Fallback: Coba 2.5 -> Gagal? -> Coba 1.5.
+    Analisis emosi dengan Timeout lebih panjang (15s) dan Versi Model Spesifik.
     """
+    # Default fallback jika tidak ada API Key
     if not user_api_key:
         return EmotionOut(emotion="happy", glow="#a78bfa")
 
-    # Prompt analisis
     prompt = f"""
     Analyze the sentiment of this text spoken by an anime character named 'Linda' (Persona: {payload.persona or 'cheerful'}).
     Text: "{payload.text}"
@@ -544,61 +518,64 @@ async def emotion_endpoint(
         "headSwaySpeed": 1.0,
         "glow": "#HEXCOLOR"
     }}
-    
-    Example: {{"emotion": "tsun", "blink": true, "wink": false, "headSwaySpeed": 2.5, "glow": "#fb7185"}}
     """
     
-    # --- DAFTAR MODEL CADANGAN ---
-    # Kita coba 2.5 dulu, kalau 503/Error, lari ke 1.5 (Lebih Stabil)
+   # --- DAFTAR MODEL OPTIMISASI ---
+    # Karena log membuktikan cuma 2.5 yang jalan di akunmu, kita taruh dia paling atas!
     candidate_models = [
-        "gemini-2.5-flash", 
-        "gemini-1.5-flash", 
-        "gemini-1.5-flash-8b"
+        ("gemini-2.5-flash", "v1beta"),      # JUARA UTAMA (Terbukti Sukses)
+        ("gemini-1.5-flash-002", "v1beta"),  # Cadangan
+        ("gemini-1.5-flash", "v1beta"),      # Cadangan
+        ("gemini-1.5-flash-8b", "v1beta"),   # Cadangan
     ]
-    
-    base_url = "https://generativelanguage.googleapis.com/v1beta/models"
 
-    for model in candidate_models:
-        url = f"{base_url}/{model}:generateContent"
-        
-        try:
-            async with httpx.AsyncClient(timeout=4.0) as client: # Timeout cepat aja
+    # Set timeout 15 detik agar tidak terputus saat model 2.5 sedang 'berpikir'
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for model, version in candidate_models:
+            url = f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent"
+            
+            try:
                 response = await client.post(
                     url,
                     params={"key": user_api_key},
                     json={"contents": [{"parts": [{"text": prompt}]}]}
                 )
                 
-                # Kalau 503 (Server Busy) atau 404, lanjut ke model berikutnya
-                if response.status_code in [503, 500, 404, 429]:
-                    logger.warning(f"Emotion: Model {model} error {response.status_code}. Mencoba backup...")
-                    continue
+                # Debugging: Cek kalau errornya bukan 200
+                if response.status_code != 200:
+                    logger.warning(f"Emotion {model} ({version}) gagal: {response.status_code}")
+                    continue 
                 
-                response.raise_for_status()
                 result = response.json()
                 
-                # Parsing JSON
-                text_response = result["candidates"][0]["content"]["parts"][0]["text"]
-                clean_json = text_response.replace("```json", "").replace("```", "").strip()
-                data = json.loads(clean_json)
+                if "candidates" in result and result["candidates"]:
+                    text_response = result["candidates"][0]["content"]["parts"][0]["text"]
+                    # Bersihkan format markdown json ```json ... ```
+                    clean_json = text_response.replace("```json", "").replace("```", "").strip()
+                    data = json.loads(clean_json)
+                    
+                    logger.info(f"Sukses analisis emosi pakai {model}")
+                    return EmotionOut(
+                        emotion=data.get("emotion", "neutral"),
+                        blink=data.get("blink", True),
+                        wink=data.get("wink", False),
+                        headSwaySpeed=float(data.get("headSwaySpeed", 1.0)),
+                        glow=data.get("glow", "#a78bfa")
+                    )
                 
-                # Sukses! Kembalikan hasil
-                return EmotionOut(
-                    emotion=data.get("emotion", "neutral"),
-                    blink=data.get("blink", True),
-                    wink=data.get("wink", False),
-                    headSwaySpeed=float(data.get("headSwaySpeed", 1.0)),
-                    glow=data.get("glow", "#a78bfa")
-                )
-                
-        except Exception as e:
-            logger.warning(f"Gagal analisis emosi pakai {model}: {e}")
-            continue # Coba model selanjutnya
+            except httpx.TimeoutException:
+                logger.warning(f"Emotion {model} TIMEOUT (kelamaan mikir).")
+                continue
+            except Exception as e:
+                logger.warning(f"Error lain pada {model}: {e}")
+                continue
 
-    # Kalau semua model gagal, senyum aja :)
-    logger.error("Semua model emotion gagal. Fallback ke default.")
+    # Kalau semua gagal, senyum aja :)
+    logger.error("Semua model emosi gagal. Fallback ke default.")
     return EmotionOut(emotion="neutral", glow="#a78bfa")
+
 
 if __name__ == "__main__":
     import uvicorn
+    # Menjalankan aplikasi dengan Uvicorn. reload=True akan aktif selama development.
     uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)
